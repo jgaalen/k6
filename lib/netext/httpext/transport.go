@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptrace"
 	"strconv"
+	"strings"
 	"sync"
+	"unicode/utf8"
 
 	"go.k6.io/k6/lib"
 	"go.k6.io/k6/lib/netext"
@@ -25,6 +27,10 @@ type transport struct {
 
 	lastRequest     *unfinishedRequest
 	lastRequestLock *sync.Mutex
+
+	// Error data fields, set from MakeRequest when HTTPErrorData is enabled.
+	errorDataReq  *Request
+	errorDataResp *Response
 }
 
 // unfinishedRequest stores the request and the raw result returned from the
@@ -147,17 +153,19 @@ func (t *transport) measureAndEmitMetrics(unfReq *unfinishedRequest) *finishedRe
 		if failed == 1 {
 			trail.Failed.Bool = true
 		}
-		trail.Samples = append(trail.Samples,
-			metrics.Sample{
-				TimeSeries: metrics.TimeSeries{
-					Metric: t.state.BuiltinMetrics.HTTPReqFailed,
-					Tags:   tagsAndMeta.Tags,
-				},
-				Time:     trail.EndTime,
-				Metadata: tagsAndMeta.Metadata,
-				Value:    failed,
+		failedSample := metrics.Sample{
+			TimeSeries: metrics.TimeSeries{
+				Metric: t.state.BuiltinMetrics.HTTPReqFailed,
+				Tags:   tagsAndMeta.Tags,
 			},
-		)
+			Time:     trail.EndTime,
+			Metadata: tagsAndMeta.Metadata,
+			Value:    failed,
+		}
+		if failed == 1 && t.state.Options.HTTPErrorData.Bool {
+			setHTTPErrorFields(&failedSample, t.errorDataReq, t.errorDataResp)
+		}
+		trail.Samples = append(trail.Samples, failedSample)
 	}
 	metrics.PushIfNotDone(t.ctx, t.state.Samples, trail)
 	return result
@@ -224,4 +232,95 @@ func (t *transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	})
 
 	return resp, err
+}
+
+// setHTTPErrorFields populates the HTTP error data fields on the sample
+// for failed HTTP requests.
+func setHTTPErrorFields(s *metrics.Sample, req *Request, resp *Response) {
+	if req != nil {
+		proto := "HTTP/1.1"
+		if resp != nil && resp.Proto != "" {
+			proto = resp.Proto
+		}
+		s.HTTPErrorReqHeaders = formatRequestHeaders(req.Method, req.URL, proto, req.Headers)
+	}
+	if req != nil && req.Body != "" {
+		if utf8.ValidString(req.Body) {
+			s.HTTPErrorReqBody = req.Body
+		} else {
+			s.HTTPErrorReqBody = "<binary>"
+		}
+	}
+	if resp != nil {
+		s.HTTPErrorResHeaders = formatResponseHeaders(resp.Proto, resp.StatusText, resp.Headers)
+	}
+	if resp != nil && resp.Body != nil {
+		switch body := resp.Body.(type) {
+		case string:
+			if body != "" {
+				if utf8.ValidString(body) {
+					s.HTTPErrorResBody = body
+				} else {
+					s.HTTPErrorResBody = "<binary>"
+				}
+			}
+		case []byte:
+			if len(body) > 0 {
+				if utf8.Valid(body) {
+					s.HTTPErrorResBody = string(body)
+				} else {
+					s.HTTPErrorResBody = "<binary>"
+				}
+			}
+		}
+	}
+}
+
+// formatRequestHeaders formats the request line and headers as a plain HTTP-style string.
+// Example: "GET /path HTTP/2\nHost: example.com\nAccept: */*"
+func formatRequestHeaders(method, url, proto string, headers map[string][]string) string {
+	var b strings.Builder
+	if proto == "HTTP/2.0" {
+		proto = "HTTP/2"
+	}
+	b.WriteString(method)
+	b.WriteByte(' ')
+	b.WriteString(url)
+	b.WriteByte(' ')
+	b.WriteString(proto)
+	for name, values := range headers {
+		for _, v := range values {
+			b.WriteByte('\n')
+			b.WriteString(name)
+			b.WriteString(": ")
+			b.WriteString(v)
+		}
+	}
+	return b.String()
+}
+
+// formatResponseHeaders formats the status line and headers as a plain HTTP-style string.
+// Example: "HTTP/2 404 Not Found\nContent-Type: text/html"
+func formatResponseHeaders(proto string, statusText string, headers map[string]string) string {
+	var b strings.Builder
+	// Status line using statusText which already contains "CODE REASON" (e.g. "404 Not Found")
+	if proto == "" {
+		proto = "HTTP/1.1"
+	}
+	// Normalize protocol: Go reports "HTTP/2.0" but conventional form is "HTTP/2"
+	if proto == "HTTP/2.0" {
+		proto = "HTTP/2"
+	}
+	b.WriteString(proto)
+	if statusText != "" {
+		b.WriteByte(' ')
+		b.WriteString(statusText)
+	}
+	for name, v := range headers {
+		b.WriteByte('\n')
+		b.WriteString(name)
+		b.WriteString(": ")
+		b.WriteString(v)
+	}
+	return b.String()
 }

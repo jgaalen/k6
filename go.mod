@@ -17,6 +17,7 @@ require (
 	github.com/fatih/color v1.18.0
 	github.com/go-json-experiment/json v0.0.0-20250211171154-1ae217ad3535
 	github.com/go-sourcemap/sourcemap v2.1.4+incompatible
+	github.com/gofrs/uuid/v5 v5.3.1
 	github.com/golang/protobuf v1.5.4
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3

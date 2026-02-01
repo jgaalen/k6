@@ -38,12 +38,16 @@ func TestMakeHeader(t *testing.T) {
 			t.Parallel()
 
 			header := MakeHeader(tags)
-			assert.Equal(t, len(tags)+5, len(header))
+			assert.Equal(t, len(tags)+9, len(header))
 			assert.Equal(t, "metric_name", header[0])
 			assert.Equal(t, "timestamp", header[1])
 			assert.Equal(t, "metric_value", header[2])
-			assert.Equal(t, "extra_tags", header[len(header)-2])
-			assert.Equal(t, "metadata", header[len(header)-1])
+			assert.Equal(t, "extra_tags", header[len(header)-6])
+			assert.Equal(t, "metadata", header[len(header)-5])
+			assert.Equal(t, "error_req_headers", header[len(header)-4])
+			assert.Equal(t, "error_req_body", header[len(header)-3])
+			assert.Equal(t, "error_res_headers", header[len(header)-2])
+			assert.Equal(t, "error_res_body", header[len(header)-1])
 		})
 	}
 }
@@ -313,12 +317,12 @@ func TestSampleToRow(t *testing.T) {
 		t.Run(testname, func(t *testing.T) {
 			t.Parallel()
 
-			row := SampleToRow(sample, resTags, ignoredTags, make([]string, 3+len(resTags)+2), timeFormat)
+			row := SampleToRow(sample, resTags, ignoredTags, make([]string, 3+len(resTags)+6), timeFormat)
 			for ind, cell := range expectedRow.baseRow {
 				assert.Equal(t, cell, row[ind])
 			}
 			for _, cell := range expectedRow.extraRow {
-				assert.Contains(t, row[len(row)-2], cell)
+				assert.Contains(t, row[len(row)-6], cell)
 			}
 		})
 	}
@@ -399,9 +403,9 @@ func TestRun(t *testing.T) {
 			fileName:       "test",
 			fileReaderFunc: readUnCompressedFile,
 			timeFormat:     "",
-			outputContent: "metric_name,timestamp,metric_value,check,error,extra_tags,metadata\n" +
-				"my_metric,1562324643,1.000000,val1,val3,url=val2,\n" +
-				"my_metric,1562324644,1.000000,val1,val3,tag4=val4&url=val2&vu=1,\n",
+			outputContent: "metric_name,timestamp,metric_value,check,error,extra_tags,metadata,error_req_headers,error_req_body,error_res_headers,error_res_body\n" +
+				"my_metric,1562324643,1.000000,val1,val3,url=val2,,,,,\n" +
+				"my_metric,1562324644,1.000000,val1,val3,tag4=val4&url=val2&vu=1,,,,,\n",
 		},
 		{
 			samples: []metrics.SampleContainer{
@@ -435,9 +439,9 @@ func TestRun(t *testing.T) {
 			fileName:       "test.gz",
 			fileReaderFunc: readCompressedFile,
 			timeFormat:     "unix",
-			outputContent: "metric_name,timestamp,metric_value,check,error,extra_tags,metadata\n" +
-				"my_metric,1562324643,1.000000,val1,val3,url=val2,y=1\n" +
-				"my_metric,1562324644,1.000000,val1,val3,name=val4&url=val2,\n",
+			outputContent: "metric_name,timestamp,metric_value,check,error,extra_tags,metadata,error_req_headers,error_req_body,error_res_headers,error_res_body\n" +
+				"my_metric,1562324643,1.000000,val1,val3,url=val2,y=1,,,,\n" +
+				"my_metric,1562324644,1.000000,val1,val3,name=val4&url=val2,,,,,\n",
 		},
 		{
 			samples: []metrics.SampleContainer{
@@ -471,9 +475,9 @@ func TestRun(t *testing.T) {
 			fileName:       "test",
 			fileReaderFunc: readUnCompressedFile,
 			timeFormat:     "rfc3339",
-			outputContent: "metric_name,timestamp,metric_value,check,error,extra_tags,metadata\n" +
-				"my_metric," + time.Unix(1562324644, 0).Format(time.RFC3339) + ",1.000000,val1,val3,url=val2,\n" +
-				"my_metric," + time.Unix(1562324644, 0).Format(time.RFC3339) + ",1.000000,val1,val3,name=val4&url=val2,y=2&z=3\n",
+			outputContent: "metric_name,timestamp,metric_value,check,error,extra_tags,metadata,error_req_headers,error_req_body,error_res_headers,error_res_body\n" +
+				"my_metric," + time.Unix(1562324644, 0).Format(time.RFC3339) + ",1.000000,val1,val3,url=val2,,,,,\n" +
+				"my_metric," + time.Unix(1562324644, 0).Format(time.RFC3339) + ",1.000000,val1,val3,name=val4&url=val2,y=2&z=3,,,,\n",
 		},
 	}
 
@@ -515,12 +519,12 @@ func sortExtraTagsForTest(t *testing.T, input string) string {
 	lines, err := r.ReadAll()
 	require.NoError(t, err)
 	for i, line := range lines[1:] {
-		extraTags := strings.Split(line[len(line)-2], "&")
+		extraTags := strings.Split(line[len(line)-6], "&")
 		sort.Strings(extraTags)
-		lines[i+1][len(line)-2] = strings.Join(extraTags, "&")
-		extraMetadata := strings.Split(line[len(line)-1], "&")
+		lines[i+1][len(line)-6] = strings.Join(extraTags, "&")
+		extraMetadata := strings.Split(line[len(line)-5], "&")
 		sort.Strings(extraMetadata)
-		lines[i+1][len(line)-1] = strings.Join(extraMetadata, "&")
+		lines[i+1][len(line)-5] = strings.Join(extraMetadata, "&")
 	}
 	var b bytes.Buffer
 	w := csv.NewWriter(&b)

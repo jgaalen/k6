@@ -8,6 +8,7 @@ import (
 
 	"go.k6.io/k6/cmd/state"
 	"go.k6.io/k6/ext"
+	"go.k6.io/k6/internal/output/breakingit"
 	"go.k6.io/k6/internal/output/cloud"
 	"go.k6.io/k6/internal/output/csv"
 	"go.k6.io/k6/internal/output/influxdb"
@@ -39,6 +40,7 @@ const (
 	builtinOutputExperimentalOpentelemetry
 	builtinOutputOpentelemetry
 	builtinOutputSummary
+	builtinOutputTimescaledbBreakingit
 )
 
 // TODO: move this to an output sub-module after we get rid of the old collectors?
@@ -68,7 +70,8 @@ func getAllOutputConstructors() (map[string]output.Constructor, error) {
 		builtinOutputExperimentalPrometheusRW.String(): func(params output.Params) (output.Output, error) {
 			return remotewrite.New(params)
 		},
-		"web-dashboard": dashboard.New,
+		"web-dashboard":                    dashboard.New,
+		builtinOutputTimescaledbBreakingit.String(): breakingit.New,
 		builtinOutputExperimentalOpentelemetry.String(): func(params output.Params) (output.Output, error) {
 			params.Logger.Warnf("OpenTelemetry output has been graduated as a stable output."+
 				"You can now use just %q instead of %q. The experimental version will be removed in future versions.",

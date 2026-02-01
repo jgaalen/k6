@@ -286,6 +286,21 @@ func MakeRequest(ctx context.Context, state *lib.State, preq *ParsedHTTPRequest)
 			resErr = NewK6Error(requestTimeoutErrorCode, requestTimeoutErrorCodeMsg, resErr)
 		}
 	}
+	if state.Options.HTTPErrorData.Bool {
+		if res != nil {
+			resp.Status = res.StatusCode
+			resp.StatusText = res.Status
+			resp.Proto = res.Proto
+			if len(res.Header) > 0 {
+				resp.Headers = make(map[string]string, len(res.Header))
+				for k, vs := range res.Header {
+					resp.Headers[k] = strings.Join(vs, ", ")
+				}
+			}
+		}
+		tracerTransport.errorDataReq = respReq
+		tracerTransport.errorDataResp = resp
+	}
 	finishedReq := tracerTransport.processLastSavedRequest(wrapDecompressionError(resErr))
 	if finishedReq != nil {
 		updateK6Response(resp, finishedReq)

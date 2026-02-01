@@ -30,6 +30,13 @@ type Sample struct {
 	// It can be nil if it wasn't explicitly specified, reduce memory
 	// allocations and GC overhead.
 	Metadata map[string]string
+
+	// HTTP error data fields, only populated on http_req_failed samples
+	// when the HTTPErrorData option is enabled.
+	HTTPErrorReqHeaders string
+	HTTPErrorReqBody    string
+	HTTPErrorResHeaders string
+	HTTPErrorResBody    string
 }
 
 // SampleContainer is a simple abstraction that allows sample

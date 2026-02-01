@@ -164,6 +164,9 @@ github.com/go-logr/stdr
 ## explicit
 github.com/go-sourcemap/sourcemap
 github.com/go-sourcemap/sourcemap/internal/base64vlq
+# github.com/gofrs/uuid/v5 v5.3.1
+## explicit; go 1.19
+github.com/gofrs/uuid/v5
 # github.com/golang/protobuf v1.5.4
 ## explicit; go 1.17
 github.com/golang/protobuf/proto
