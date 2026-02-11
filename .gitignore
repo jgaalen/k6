@@ -1,4 +1,4 @@
-/k6
+/k6*
 /k6.exe
 /dist
 /pkg-build
@@ -7,6 +7,8 @@
 /internal/js/modules/k6/experimental/streams/tests/wpt
 /internal/js/modules/k6/webcrypto/tests/wpt/
 /.protoc
+/output.csv
+
 
 .vscode
 *.sublime-workspace
