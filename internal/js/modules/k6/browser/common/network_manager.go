@@ -245,7 +245,11 @@ func (m *NetworkManager) emitResponseMetrics(resp *Response, req *Request) {
 	)
 	if resp != nil {
 		status = resp.status
-		bodySize = resp.Size().Total()
+		if req.encodedDataLength > 0 {
+			bodySize = req.encodedDataLength // actual bytes over the wire (compressed + headers)
+		} else {
+			bodySize = resp.Size().Total() // fallback to decoded size
+		}
 		ipAddress = resp.remoteAddress.IPAddress
 		protocol = resp.protocol
 		fromCache = resp.fromDiskCache
@@ -285,11 +289,85 @@ func (m *NetworkManager) emitResponseMetrics(resp *Response, req *Request) {
 	tags = tags.With("from_service_worker", strconv.FormatBool(fromSvcWrk))
 	tags = tags.With("resource_type", req.ResourceType())
 
+	// CDP ResourceTiming: RequestTime is baseline (seconds); other fields are ms relative to it.
+	// k6 time metrics are emitted in milliseconds (see metrics.D), so we keep all timings in ms here.
+	// blocked = time until we could start sending (includes DNS, queue, connecting, tls) — same idea as k6 GetConn→GotConn.
+	var blocked, connecting, tlsHandshaking, sending, waiting, receiving, durationMs float64
+	if resp != nil && resp.timing != nil {
+		t := resp.timing
+		blocked = t.SendStart
+		if blocked < 0 {
+			blocked = 0
+		}
+		if t.SslStart > 0 {
+			connecting = t.SslStart - t.ConnectStart
+			tlsHandshaking = t.ConnectEnd - t.SslStart
+		} else {
+			connecting = t.ConnectEnd - t.ConnectStart
+		}
+		if connecting < 0 {
+			connecting = 0
+		}
+		if tlsHandshaking < 0 {
+			tlsHandshaking = 0
+		}
+
+		sending = t.SendEnd - t.SendStart
+		if sending < 0 {
+			sending = 0
+		}
+		waiting = t.ReceiveHeadersEnd - t.SendEnd
+		if waiting < 0 {
+			waiting = 0
+		}
+		// receiving = time from headers received to response complete.
+		// Primary approach: convert ResourceTiming.RequestTime (monotonic seconds since boot)
+		// to a Go time.Time using cdp.MonotonicTimeEpoch, then compute responseEnd in ms
+		// relative to RequestTime. This keeps everything in the ResourceTiming time base,
+		// avoiding the dependency on headersEndWall (which may be zero for cross-session
+		// iframe requests where onResponseReceived can't find the request).
+		const maxReasonableMs = 300000 // 5 minutes
+		receiving = m.calcReceiving(req, t, maxReasonableMs)
+		durationMs = sending + waiting + receiving // same as k6 http: exclude blocked/connecting/tls
+	} else {
+		durationMs = k6metrics.D(wallTime.Sub(req.wallTime))
+	}
+
 	k6metrics.PushIfNotDone(m.vu.Context(), state.Samples, k6metrics.ConnectedSamples{
 		Samples: []k6metrics.Sample{
 			{
 				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqDuration, Tags: tags},
-				Value:      k6metrics.D(wallTime.Sub(req.wallTime)),
+				Value:      durationMs,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqBlocked, Tags: tags},
+				Value:      blocked,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqConnecting, Tags: tags},
+				Value:      connecting,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqTLSHandshaking, Tags: tags},
+				Value:      tlsHandshaking,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqSending, Tags: tags},
+				Value:      sending,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqWaiting, Tags: tags},
+				Value:      waiting,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqReceiving, Tags: tags},
+				Value:      receiving,
 				Time:       wallTime,
 			},
 			{
@@ -300,17 +378,160 @@ func (m *NetworkManager) emitResponseMetrics(resp *Response, req *Request) {
 		},
 	})
 
-	if resp != nil && resp.timing != nil {
+	if resp != nil {
+		sample := k6metrics.Sample{
+			TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqFailed, Tags: tags},
+			Value:      failed,
+			Time:       wallTime,
+		}
+		if failed == 1 {
+			reqHeaders, reqBody := req.formatErrorRequestData()
+			sample.HTTPErrorReqHeaders = reqHeaders
+			sample.HTTPErrorReqBody = reqBody
+			// Fetch response body so error reporting includes it (formatErrorResponseData only uses already-loaded body otherwise).
+			_ = resp.fetchBody()
+			resHeaders, resBody := resp.formatErrorResponseData()
+			sample.HTTPErrorResHeaders = resHeaders
+			sample.HTTPErrorResBody = resBody
+		}
 		k6metrics.PushIfNotDone(m.vu.Context(), state.Samples, k6metrics.ConnectedSamples{
-			Samples: []k6metrics.Sample{
-				{
-					TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqFailed, Tags: tags},
-					Value:      failed,
-					Time:       wallTime,
-				},
-			},
+			Samples: []k6metrics.Sample{sample},
 		})
 	}
+}
+
+// calcReceiving computes the receiving phase duration in milliseconds.
+// It tries two approaches in order:
+//  1. Convert ResourceTiming.RequestTime (monotonic seconds since boot) to a Go time.Time
+//     using cdp.MonotonicTimeEpoch, then compute responseEnd relative to RequestTime in ms.
+//     receiving = responseEndMs - ReceiveHeadersEnd. This works regardless of whether
+//     onResponseReceived found the request (no dependency on headersEndWall).
+//  2. Fall back to headersEndWall/responseEndWall wall-time subtraction (for cached responses
+//     where RequestTime may be zero).
+//
+// Returns 0 with a debug log if neither approach yields a valid result.
+func (m *NetworkManager) calcReceiving(req *Request, t *network.ResourceTiming, maxMs float64) float64 {
+	// Primary: use MonotonicTimeEpoch + RequestTime to stay in ResourceTiming's time base.
+	if t.RequestTime > 0 && !req.responseEndWall.IsZero() && cdp.MonotonicTimeEpoch != nil {
+		requestTimeGo := cdp.MonotonicTimeEpoch.Add(
+			time.Duration(t.RequestTime * float64(time.Second)),
+		)
+		responseEndMs := req.responseEndWall.Sub(requestTimeGo).Seconds() * 1000
+		receiving := responseEndMs - t.ReceiveHeadersEnd
+		if receiving >= 0 && receiving <= maxMs {
+			return receiving
+		}
+	}
+
+	// Fallback: wall-time subtraction (works for cached responses and normal cases
+	// where onResponseReceived successfully set headersEndWall).
+	if !req.headersEndWall.IsZero() && !req.responseEndWall.IsZero() {
+		receiving := req.responseEndWall.Sub(req.headersEndWall).Seconds() * 1000
+		if receiving >= 0 && receiving <= maxMs {
+			return receiving
+		}
+	}
+
+	m.logger.Debugf("NetworkManager:calcReceiving",
+		"could not compute receiving for %s (RequestTime=%.3f headersEndWall=%v responseEndWall=%v)",
+		req.url, t.RequestTime, req.headersEndWall, req.responseEndWall)
+
+	return 0
+}
+
+// emitRequestFailedMetrics emits browser_http_req_duration, browser_data_received, and
+// browser_http_req_failed for requests that failed before receiving a response (e.g.
+// ERR_CONNECTION_REFUSED). This ensures outputs like breakingit receive metrics for
+// failed navigations/requests. The failure reason (e.g. net::ERR_NAME_NOT_RESOLVED) is
+// added as the "error" tag so CSV and other outputs can show it.
+func (m *NetworkManager) emitRequestFailedMetrics(req *Request) {
+	state := m.vu.State()
+	wallTime := time.Now()
+	url := req.url.String()
+
+	// Some failures, like net::ERR_BLOCKED_BY_CLIENT, are caused by client-side
+	// blockers (ad-blockers, inspector, etc.) and should not be recorded as
+	// application metrics. Skip emitting any metrics for those.
+	if failure := req.Failure(); failure != nil && failure.ErrorText != "" {
+		if strings.Contains(failure.ErrorText, "ERR_BLOCKED_BY_CLIENT") {
+			return
+		}
+	}
+
+	tags := state.Tags.GetCurrentValues().Tags
+	if state.Options.SystemTags.Has(k6metrics.TagMethod) {
+		tags = tags.With("method", req.method)
+	}
+	if state.Options.SystemTags.Has(k6metrics.TagURL) {
+		tags = handleURLTag(m.eventInterceptor, url, req.method, tags)
+	}
+	if state.Options.SystemTags.Has(k6metrics.TagStatus) {
+		tags = tags.With("status", "0")
+	}
+	if failure := req.Failure(); failure != nil && failure.ErrorText != "" {
+		tags = tags.With("error", failure.ErrorText)
+	}
+	tags = tags.With("from_cache", "false")
+	tags = tags.With("from_prefetch_cache", "false")
+	tags = tags.With("from_service_worker", "false")
+	tags = tags.With("resource_type", req.ResourceType())
+
+	durationMs := k6metrics.D(wallTime.Sub(req.wallTime))
+	reqHeaders, reqBody := req.formatErrorRequestData()
+
+	k6metrics.PushIfNotDone(m.vu.Context(), state.Samples, k6metrics.ConnectedSamples{
+		Samples: []k6metrics.Sample{
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqDuration, Tags: tags},
+				Value:      durationMs,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqBlocked, Tags: tags},
+				Value:      0,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqConnecting, Tags: tags},
+				Value:      0,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqTLSHandshaking, Tags: tags},
+				Value:      0,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqSending, Tags: tags},
+				Value:      0,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqWaiting, Tags: tags},
+				Value:      0,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqReceiving, Tags: tags},
+				Value:      0,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: m.customMetrics.BrowserDataReceived, Tags: tags},
+				Value:      0,
+				Time:       wallTime,
+			},
+			{
+				TimeSeries:            k6metrics.TimeSeries{Metric: m.customMetrics.BrowserHTTPReqFailed, Tags: tags},
+				Value:                 1,
+				Time:                  wallTime,
+				HTTPErrorReqHeaders:   reqHeaders,
+				HTTPErrorReqBody:      reqBody,
+				HTTPErrorResHeaders:   "",
+				HTTPErrorResBody:      "",
+			},
+		},
+	})
 }
 
 // handleURLTag will check if the url tag needs to be grouped by testing
@@ -423,7 +644,13 @@ func (m *NetworkManager) onLoadingFailed(event *network.EventLoadingFailed) {
 	}
 
 	req.setErrorText(event.ErrorText)
-	req.responseEndTiming = float64(event.Timestamp.Time().Unix()-req.timestamp.Unix()) * 1000
+	req.responseEndTiming = float64(event.Timestamp.Time().Sub(req.timestamp).Milliseconds())
+
+	// Emit browser metrics for failed requests so outputs (e.g. breakingit) can store them.
+	if !isInternalURL(req.url) {
+		m.emitRequestFailedMetrics(req)
+	}
+
 	m.eventInterceptor.onRequestFailed(req)
 	m.deleteRequestByID(event.RequestID)
 	m.frameManager.requestFailed(req, event.Canceled)
@@ -436,7 +663,9 @@ func (m *NetworkManager) onLoadingFinished(event *network.EventLoadingFinished) 
 		return
 	}
 
-	req.responseEndTiming = float64(event.Timestamp.Time().Unix()-req.timestamp.Unix()) * 1000
+	req.responseEndWall = event.Timestamp.Time()
+	req.responseEndTiming = float64(event.Timestamp.Time().Sub(req.timestamp).Milliseconds())
+	req.encodedDataLength = int64(event.EncodedDataLength)
 	m.deleteRequestByID(event.RequestID)
 	m.frameManager.requestFinished(req)
 	m.eventInterceptor.onRequestFinished(req)
@@ -640,7 +869,7 @@ func (m *NetworkManager) onRequestPaused(event *fetch.EventRequestPaused) {
 				}
 				return
 			}
-			m.logger.Warnf("NetworkManager:onRequestPaused",
+			m.logger.Debugf("NetworkManager:onRequestPaused",
 				"request %s %s was aborted: %s", event.Request.Method, event.Request.URL, failErr)
 
 			return
@@ -762,6 +991,11 @@ func (m *NetworkManager) onResponseReceived(event *network.EventResponseReceived
 	resp := NewHTTPResponse(m.ctx, req, event.Response, event.Timestamp)
 	req.responseMu.Lock()
 	req.response = resp
+	// Use event.Timestamp for headersEndWall so it shares the same time base as responseEndWall
+	// (LoadingFinished.Timestamp). Both are CDP MonotonicTime values converted via
+	// cdp.MonotonicTimeEpoch (host boot time). This is used as the fallback in calcReceiving
+	// when the primary RequestTime-based approach can't be used (e.g. cached responses).
+	req.headersEndWall = event.Timestamp.Time()
 	req.responseMu.Unlock()
 
 	m.logger.Debugf("FrameManager:onResponseReceived", "rid:%s rurl:%s", event.RequestID, resp.URL())

@@ -65,18 +65,16 @@ type Logger struct {
 	httpClient *http.Client
 
 	// batch buffers
-	mu         sync.Mutex
-	bufHTTP    *bytes.Buffer
-	bufBrowser *bytes.Buffer
-	bufVUs     *bytes.Buffer
+	mu      sync.Mutex
+	bufHTTP *bytes.Buffer
+	bufVUs  *bytes.Buffer
 	bufTrans   *bytes.Buffer
 	bufErrors  *bytes.Buffer
 	batchTimer *time.Timer
 	flushing   bool // flag to prevent recursive flush calls
 
 	// merging state
-	pendingGroups     map[int64]*MetricGroup // browser
-	pendingHttpGroups map[int64]*MetricGroup // http
+	pendingHttpGroups map[int64]*MetricGroup // http and browser (unified)
 	cleanupStop       chan struct{}
 	envTags           map[string]string
 	customPatterns    map[string]string
@@ -160,11 +158,9 @@ func New(params output.Params) (output.Output, error) {
 		token:             token,
 		httpClient:        client,
 		bufHTTP:           &bytes.Buffer{},
-		bufBrowser:        &bytes.Buffer{},
 		bufVUs:            &bytes.Buffer{},
 		bufTrans:          &bytes.Buffer{},
 		bufErrors:         &bytes.Buffer{},
-		pendingGroups:     make(map[int64]*MetricGroup),
 		pendingHttpGroups: make(map[int64]*MetricGroup),
 		cleanupStop:       make(chan struct{}),
 		envTags:           envTags,
@@ -205,15 +201,8 @@ func (l *Logger) cleanupProcessor() {
 		select {
 		case <-t.C:
 			now := time.Now()
-			toProcess := make([]*MetricGroup, 0)
 			toProcessHTTP := make([]*MetricGroup, 0)
 			l.mu.Lock()
-			for ts, g := range l.pendingGroups {
-				if now.Sub(g.LastUpdate) > time.Second {
-					toProcess = append(toProcess, g)
-					delete(l.pendingGroups, ts)
-				}
-			}
 			for ts, g := range l.pendingHttpGroups {
 				if now.Sub(g.LastUpdate) > time.Second {
 					toProcessHTTP = append(toProcessHTTP, g)
@@ -221,9 +210,6 @@ func (l *Logger) cleanupProcessor() {
 				}
 			}
 			l.mu.Unlock()
-			for _, g := range toProcess {
-				l.processBrowserGroup(g)
-			}
 			for _, g := range toProcessHTTP {
 				l.processHttpGroup(g)
 			}
@@ -240,7 +226,7 @@ func (l *Logger) flush() {
 		l.mu.Unlock()
 		return
 	}
-	if l.bufHTTP.Len() == 0 && l.bufBrowser.Len() == 0 && l.bufVUs.Len() == 0 && l.bufTrans.Len() == 0 && l.bufErrors.Len() == 0 {
+	if l.bufHTTP.Len() == 0 && l.bufVUs.Len() == 0 && l.bufTrans.Len() == 0 && l.bufErrors.Len() == 0 {
 		l.mu.Unlock()
 		return
 	}
@@ -249,9 +235,6 @@ func (l *Logger) flush() {
 	bufHTTPSnapshot := make([]byte, l.bufHTTP.Len())
 	copy(bufHTTPSnapshot, l.bufHTTP.Bytes())
 	bufHTTPLen := l.bufHTTP.Len()
-	bufBrowserSnapshot := make([]byte, l.bufBrowser.Len())
-	copy(bufBrowserSnapshot, l.bufBrowser.Bytes())
-	bufBrowserLen := l.bufBrowser.Len()
 	bufVUsSnapshot := make([]byte, l.bufVUs.Len())
 	copy(bufVUsSnapshot, l.bufVUs.Bytes())
 	bufVUsLen := l.bufVUs.Len()
@@ -278,17 +261,6 @@ func (l *Logger) flush() {
 		h.Set("X-Format", "csv")
 		pw, _ := mw.CreatePart(h)
 		_, _ = io.Copy(pw, bytes.NewReader(bufHTTPSnapshot))
-	}
-	if len(bufBrowserSnapshot) > 0 {
-		h := make(textproto.MIMEHeader)
-		table := "public.k6_browser_requests"
-		if l.isSynthetic {
-			table = "public.k6_browser_requests_sm"
-		}
-		h.Set("X-Table", table)
-		h.Set("X-Format", "csv")
-		pw, _ := mw.CreatePart(h)
-		_, _ = io.Copy(pw, bytes.NewReader(bufBrowserSnapshot))
 	}
 	if len(bufVUsSnapshot) > 0 && !l.isSynthetic {
 		h := make(textproto.MIMEHeader)
@@ -395,7 +367,7 @@ func (l *Logger) flush() {
 	// Reset buffers and check for new data that accumulated during retries
 	l.mu.Lock()
 	hasNewData := false
-	var newHTTPData, newBrowserData, newVUsData, newTransData, newErrorsData []byte
+	var newHTTPData, newVUsData, newTransData, newErrorsData []byte
 
 	if success {
 		// Check if any buffers grew during retries (new data accumulated)
@@ -404,11 +376,6 @@ func (l *Logger) flush() {
 			hasNewData = true
 			newHTTPData = make([]byte, l.bufHTTP.Len()-bufHTTPLen)
 			copy(newHTTPData, l.bufHTTP.Bytes()[bufHTTPLen:])
-		}
-		if l.bufBrowser.Len() > bufBrowserLen {
-			hasNewData = true
-			newBrowserData = make([]byte, l.bufBrowser.Len()-bufBrowserLen)
-			copy(newBrowserData, l.bufBrowser.Bytes()[bufBrowserLen:])
 		}
 		if l.bufVUs.Len() > bufVUsLen {
 			hasNewData = true
@@ -428,7 +395,6 @@ func (l *Logger) flush() {
 
 		// Clear buffers (we successfully sent the snapshot)
 		l.bufHTTP.Reset()
-		l.bufBrowser.Reset()
 		l.bufVUs.Reset()
 		l.bufTrans.Reset()
 		l.bufErrors.Reset()
@@ -436,9 +402,6 @@ func (l *Logger) flush() {
 		// Restore new data that accumulated during retries
 		if len(newHTTPData) > 0 {
 			l.bufHTTP.Write(newHTTPData)
-		}
-		if len(newBrowserData) > 0 {
-			l.bufBrowser.Write(newBrowserData)
 		}
 		if len(newVUsData) > 0 {
 			l.bufVUs.Write(newVUsData)
@@ -452,7 +415,6 @@ func (l *Logger) flush() {
 	} else {
 		// Retry loop exited without success (either timeout or early break), clear buffers to prevent unbounded growth
 		l.bufHTTP.Reset()
-		l.bufBrowser.Reset()
 		l.bufVUs.Reset()
 		l.bufTrans.Reset()
 		l.bufErrors.Reset()
@@ -468,27 +430,40 @@ func (l *Logger) flush() {
 	}
 }
 
-func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
-	httpMetrics := map[string]bool{
-		"http_req_duration":        true,
-		"http_req_blocked":         true,
-		"http_req_connecting":      true,
-		"http_req_tls_handshaking": true,
-		"http_req_sending":         true,
-		"http_req_waiting":         true,
-		"http_req_receiving":       true,
-		"http_req_failed":          true,
+// httpMetricCanonicalKey maps http_* and browser_http_* metric names to the
+// canonical key used in MetricGroup.Values (http_req_* or data_received).
+// Returns "" if the metric is not an HTTP-like request metric.
+func httpMetricCanonicalKey(metricName string) string {
+	switch metricName {
+	case "http_req_duration", "browser_http_req_duration":
+		return "http_req_duration"
+	case "http_req_blocked", "browser_http_req_blocked":
+		return "http_req_blocked"
+	case "http_req_connecting", "browser_http_req_connecting":
+		return "http_req_connecting"
+	case "http_req_tls_handshaking", "browser_http_req_tls_handshaking":
+		return "http_req_tls_handshaking"
+	case "http_req_sending", "browser_http_req_sending":
+		return "http_req_sending"
+	case "http_req_waiting", "browser_http_req_waiting":
+		return "http_req_waiting"
+	case "http_req_receiving", "browser_http_req_receiving":
+		return "http_req_receiving"
+	case "http_req_failed", "browser_http_req_failed":
+		return "http_req_failed"
+	case "browser_data_received":
+		return "data_received"
+	default:
+		return ""
 	}
-	browserMetrics := map[string]bool{
-		"browser_http_req_duration": true,
-		"browser_data_received":     true,
-		"browser_http_req_failed":   true,
-	}
+}
 
+func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 	for _, sc := range samples {
 		for _, s := range sc.GetSamples() {
 			ts := s.Time.UnixNano()
-			if httpMetrics[s.Metric.Name] {
+			canonicalKey := httpMetricCanonicalKey(s.Metric.Name)
+			if canonicalKey != "" {
 				l.mu.Lock()
 				g, ok := l.pendingHttpGroups[ts]
 				if !ok {
@@ -496,38 +471,19 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 					l.pendingHttpGroups[ts] = g
 					copyTagsForHTTP(g.Tags, s.Tags.Map(), l.envTags, l.customPatterns)
 				}
-				g.Values[s.Metric.Name] = s.Value
-				if s.Metric.Name == "http_req_failed" {
+				g.Values[canonicalKey] = s.Value
+				if canonicalKey == "http_req_failed" {
 					g.ErrorReqHeaders = s.HTTPErrorReqHeaders
 					g.ErrorReqBody = s.HTTPErrorReqBody
 					g.ErrorResHeaders = s.HTTPErrorResHeaders
 					g.ErrorResBody = s.HTTPErrorResBody
 				}
 				g.LastUpdate = time.Now()
-				// If we have all 8 values, process immediately
-				if len(g.Values) >= 8 { // 7 numeric + failed bool captured as float
+				// Process when we have the 8 required metrics (including http_req_failed); data_received is optional (browser only)
+				if _, hasFailed := g.Values["http_req_failed"]; hasFailed && len(g.Values) >= 8 {
 					delete(l.pendingHttpGroups, ts)
 					l.mu.Unlock()
 					l.processHttpGroup(g)
-					continue
-				}
-				l.mu.Unlock()
-				continue
-			}
-			if browserMetrics[s.Metric.Name] {
-				l.mu.Lock()
-				g, ok := l.pendingGroups[ts]
-				if !ok {
-					g = &MetricGroup{Timestamp: ts, Tags: map[string]string{}, Values: map[string]float64{}, LastUpdate: time.Now()}
-					l.pendingGroups[ts] = g
-					copyTagsForBrowser(g.Tags, s.Tags.Map(), l.envTags, l.customPatterns)
-				}
-				g.Values[s.Metric.Name] = s.Value
-				g.LastUpdate = time.Now()
-				if len(g.Values) >= 3 {
-					delete(l.pendingGroups, ts)
-					l.mu.Unlock()
-					l.processBrowserGroup(g)
 					continue
 				}
 				l.mu.Unlock()
@@ -566,7 +522,7 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 						fmt.Sprintf("%v", l.envTags["scenario_name"]),
 						fmt.Sprintf("%v", l.envTags["location"]),
 						fmt.Sprintf("%v", l.envTags["node_name"]),
-						"", // thread_group_name not applicable for k6 browser pages
+						fmt.Sprintf("%v", m["scenario"]), // thread_group_name from k6 scenario tag
 						transactionName,
 						"true",
 						"",
@@ -770,14 +726,27 @@ func (l *Logger) processHttpGroup(g *MetricGroup) {
 	// Non-SM: time, run_id, location, transaction_name, sampler_name, success, request_size, response_size, response_code, response_connect_time, response_latency, response_time
 	// SM:     time, scenario_name, location, node_name, thread_group_name, transaction_name, sampler_name, success, request_size, response_size, response_code, response_connect_time, response_latency, response_time
 
-	// transaction_name comes from group tag; strip leading "::" if present
-	transactionName := strings.TrimPrefix(g.Tags["group"], "::")
-
 	// sampler_name: use path (normalized URL path if name was URL, or name itself capped at 64 chars if not)
 	samplerName := g.Tags["path"]
 	if samplerName == "" {
-		// Fallback to name if path somehow missing
 		samplerName = g.Tags["name"]
+	}
+	// transaction_name: only set when we have an explicit "transaction" tag or "group" (from group()/group_duration).
+	// If neither is set, leave empty (do not use sampler_name for browser).
+	isBrowser := g.Tags["resource_type"] != ""
+	var transactionName string
+	if g.Tags["transaction"] != "" {
+		transactionName = g.Tags["transaction"]
+	} else if g.Tags["group"] != "" {
+		transactionName = strings.TrimPrefix(g.Tags["group"], "::")
+		// For browser, group is often auto-filled from path/name in copyTagsForHTTP; treat that as empty so we don't duplicate sampler_name.
+		if isBrowser && (transactionName == samplerName || transactionName == "/") {
+			transactionName = ""
+		}
+	}
+	// Browser OPTIONS requests (CORS preflight): append _preflight to sampler_name
+	if isBrowser && g.Tags["method"] == "OPTIONS" {
+		samplerName = samplerName + "_preflight"
 	}
 
 	// success is the inverse of http_req_failed
@@ -790,7 +759,7 @@ func (l *Logger) processHttpGroup(g *MetricGroup) {
 	responseCode := g.Tags["status"]
 
 	// Timing fields (cast to integer strings) - matching JMeter definitions
-	// Note: http_req_duration = sending + waiting + receiving (does NOT include blocked, connecting, or tls_handshaking)
+	// http_req_duration = sending + waiting + receiving (same for k6 HTTP and browser)
 	// See: https://grafana.com/docs/k6/latest/using-k6/metrics/reference/
 	connecting := g.Values["http_req_connecting"]
 	tlsHandshaking := g.Values["http_req_tls_handshaking"]
@@ -804,6 +773,12 @@ func (l *Logger) processHttpGroup(g *MetricGroup) {
 	// JMeter-style: responseTime = full time from TCP connect to complete response received
 	responseTime := fmtInt(connecting + tlsHandshaking + duration)
 
+	// response_size from browser_data_received when present (browser only); k6 HTTP has no per-request size in this group
+	responseSize := ""
+	if v, ok := g.Values["data_received"]; ok && v >= 0 {
+		responseSize = fmtInt(v)
+	}
+
 	var row []string
 	if l.isSynthetic {
 		row = []string{
@@ -816,7 +791,7 @@ func (l *Logger) processHttpGroup(g *MetricGroup) {
 			samplerName,
 			success,
 			"", // request_size unknown
-			"", // response_size unknown
+			responseSize,
 			responseCode,
 			connectTime,
 			latency,
@@ -831,7 +806,7 @@ func (l *Logger) processHttpGroup(g *MetricGroup) {
 			samplerName,
 			success,
 			"", // request_size unknown
-			"", // response_size unknown
+			responseSize,
 			responseCode,
 			connectTime,
 			latency,
@@ -871,12 +846,18 @@ func (l *Logger) processHttpGroup(g *MetricGroup) {
 			responseMessage = ""
 		}
 		responseMessage = strings.TrimSpace(responseMessage)
+		// Browser 4xx/5xx often have no "error" tag; use status for response_message
+		if responseMessage == "" && responseCode != "" && responseCode != "0" {
+			responseMessage = "HTTP " + responseCode
+		}
 		nameRaw := g.Tags["name"]
-		// samplerName already derived; ensure non-empty
+		// samplerName already derived; ensure non-empty for k6 HTTP (browser: leave empty when no transaction name)
 		if samplerName == "" || samplerName == "<nil>" {
-			samplerName = transactionName
-			if samplerName == "" || samplerName == "<nil>" {
-				samplerName = "/"
+			if !isBrowser {
+				samplerName = transactionName
+				if samplerName == "" || samplerName == "<nil>" {
+					samplerName = "/"
+				}
 			}
 		}
 		// Generate UUIDv7 using the measurement timestamp
@@ -928,61 +909,6 @@ func (l *Logger) processHttpGroup(g *MetricGroup) {
 			we.Flush()
 		}
 	}
-	l.mu.Unlock()
-}
-
-func (l *Logger) processBrowserGroup(g *MetricGroup) {
-	if g == nil {
-		return
-	}
-	runOrScenario := g.Tags["run_id"]
-	isSynthetic := l.isSynthetic
-	if isSynthetic {
-		runOrScenario = g.Tags["scenario_name"]
-	}
-	var row []string
-	if isSynthetic {
-		// k6_browser_requests_sm: time, scenario_name, location, node_name, scheme, hostname, path, name, method, resource_type, status, metrics...
-		row = []string{
-			time.Unix(0, g.Timestamp).UTC().Format(time.RFC3339Nano),
-			runOrScenario,
-			g.Tags["location"],
-			g.Tags["node_name"],
-			g.Tags["scheme"],
-			g.Tags["hostname"],
-			g.Tags["path"],
-			g.Tags["name"],
-			g.Tags["method"],
-			g.Tags["resource_type"],
-			g.Tags["status"],
-			fmtFloat(g.Values["browser_http_req_duration"]),
-			fmtFloat(g.Values["browser_data_received"]),
-			fmtBool(g.Values["browser_http_req_failed"]),
-		}
-	} else {
-		// k6_browser_requests (with run_id and scenario_name fields)
-		row = []string{
-			time.Unix(0, g.Timestamp).UTC().Format(time.RFC3339Nano),
-			runOrScenario,
-			g.Tags["location"],
-			g.Tags["node_name"],
-			g.Tags["scheme"],
-			g.Tags["hostname"],
-			g.Tags["path"],
-			g.Tags["name"],
-			g.Tags["method"],
-			g.Tags["resource_type"],
-			g.Tags["scenario_name"],
-			g.Tags["status"],
-			fmtFloat(g.Values["browser_http_req_duration"]),
-			fmtFloat(g.Values["browser_data_received"]),
-			fmtBool(g.Values["browser_http_req_failed"]),
-		}
-	}
-	l.mu.Lock()
-	w := csv.NewWriter(l.bufBrowser)
-	_ = w.Write(row)
-	w.Flush()
 	l.mu.Unlock()
 }
 
@@ -1319,47 +1245,14 @@ func copyTagsForHTTP(dst map[string]string, tags map[string]string, env map[stri
 	if v, ok := tags["scenario"]; ok {
 		dst["scenario"] = fmt.Sprintf("%v", v)
 	}
-}
-
-func copyTagsForBrowser(dst map[string]string, tags map[string]string, env map[string]string, customPatterns map[string]string) {
-	for k, v := range env {
-		if !excludedTags[k] {
-			if k == "nodeName" {
-				dst["node_name"] = v
-				continue
-			}
-			if k == "scenarioName" {
-				dst["scenario_name"] = v
-				continue
-			}
-			if k == "runId" {
-				dst["run_id"] = v
-				continue
-			}
-			dst[k] = v
+	// Browser samples often lack "group"; use path or name so processHttpGroup gets a transaction name
+	if dst["group"] == "" {
+		dst["group"] = dst["path"]
+		if dst["group"] == "" {
+			dst["group"] = dst["name"]
 		}
-	}
-	if name, ok := tags["name"]; ok {
-		nameStr := fmt.Sprintf("%v", name)
-		scheme, host, path, clean := processNameTag(nameStr, customPatterns)
-		dst["name"] = clean
-		if scheme != "" {
-			// It was a URL, store scheme, hostname, and path
-			dst["scheme"] = scheme
-			dst["hostname"] = host
-			dst["path"] = path
-		} else {
-			// It was not a URL, path contains the name (capped at 64)
-			dst["path"] = path
-		}
-	}
-	for k, v := range tags {
-		if !excludedTags[k] {
-			// preserve normalized fields
-			if k == "name" || k == "path" || k == "hostname" || k == "scheme" {
-				continue
-			}
-			dst[k] = fmt.Sprintf("%v", v)
+		if dst["group"] == "" {
+			dst["group"] = "/"
 		}
 	}
 }

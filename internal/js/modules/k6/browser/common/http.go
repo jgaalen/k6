@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode/utf8"
 
 	"github.com/chromedp/cdproto/fetch"
 
@@ -106,6 +107,12 @@ type Request struct {
 	timestamp         time.Time
 	wallTime          time.Time
 	responseEndTiming float64
+	// headersEndWall: when response headers were received (onResponseReceived). Used for receiving phase.
+	headersEndWall time.Time
+	// responseEndWall: when response fully received (onLoadingFinished). Used for receiving phase.
+	responseEndWall time.Time
+	// encodedDataLength: actual bytes received over the wire (compressed + headers), from LoadingFinished.
+	encodedDataLength int64
 }
 
 // NewRequestParams are input parameters for NewRequest.
@@ -247,6 +254,36 @@ func (r *Request) Failure() *RequestFailure {
 		return nil
 	}
 	return &RequestFailure{ErrorText: r.errorText}
+}
+
+// formatErrorRequestData returns request headers and body strings for error reporting
+// (e.g. when a browser request fails before receiving a response). Used so outputs
+// can store request data in the errors table, similar to k6 HTTP.
+func (r *Request) formatErrorRequestData() (headers, body string) {
+	requestURI := r.url.RequestURI()
+	var b strings.Builder
+	b.WriteString(r.method)
+	b.WriteByte(' ')
+	b.WriteString(requestURI)
+	b.WriteString(" HTTP/1.1")
+	for name, values := range r.headers {
+		for _, v := range values {
+			b.WriteByte('\n')
+			b.WriteString(name)
+			b.WriteString(": ")
+			b.WriteString(v)
+		}
+	}
+	headers = b.String()
+	bodyStr := strings.Join(r.postDataEntries, "")
+	if bodyStr != "" {
+		if utf8.ValidString(bodyStr) {
+			body = bodyStr
+		} else {
+			body = "<binary>"
+		}
+	}
+	return headers, body
 }
 
 func (r *Request) setLoadedFromCache(fromMemoryCache bool) {
@@ -701,6 +738,44 @@ func (r *Response) Status() int64 {
 // StatusText returns the response status text.
 func (r *Response) StatusText() string {
 	return r.statusText
+}
+
+// formatErrorResponseData returns response status line, headers and body for error
+// reporting (e.g. 4xx/5xx). Body is only included if already loaded (no fetch).
+func (r *Response) formatErrorResponseData() (headers, body string) {
+	proto := r.protocol
+	if proto == "" {
+		proto = "HTTP/1.1"
+	}
+	if proto == "HTTP/2.0" {
+		proto = "HTTP/2"
+	}
+	var b strings.Builder
+	b.WriteString(proto)
+	if r.statusText != "" {
+		b.WriteByte(' ')
+		b.WriteString(r.statusText)
+	}
+	for name, values := range r.headers {
+		for _, v := range values {
+			b.WriteByte('\n')
+			b.WriteString(name)
+			b.WriteString(": ")
+			b.WriteString(v)
+		}
+	}
+	headers = b.String()
+	r.bodyMu.RLock()
+	bodyBytes := r.body
+	r.bodyMu.RUnlock()
+	if len(bodyBytes) > 0 {
+		if utf8.Valid(bodyBytes) {
+			body = string(bodyBytes)
+		} else {
+			body = "<binary>"
+		}
+	}
+	return headers, body
 }
 
 // Text returns the response body as a string.

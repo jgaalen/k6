@@ -3,6 +3,7 @@ package common
 import (
 	"context"
 	"fmt"
+	"math"
 	"net"
 	"testing"
 	"time"
@@ -313,7 +314,7 @@ func TestNetworkManagerEmitRequestResponseMetricsTimingSkew(t *testing.T) {
 			n = vu.AssertSamples(func(s k6metrics.Sample) {
 				assert.Equalf(t, tt.wantRes.wt, s.Time, "timing skew in %s", s.Metric.Name)
 			})
-			assert.Equalf(t, 3, n, "should emit 8 response metrics")
+			assert.Equalf(t, 9, n, "should emit 9 response metrics (8 timing+data + failed)")
 		})
 	}
 }
@@ -402,4 +403,212 @@ func TestRequestForOnLoadingFinished(t *testing.T) {
 			assert.Equal(t, tt.want, r)
 		})
 	}
+}
+
+// TestNetworkManagerReceivingMetric verifies that the receiving metric is
+// computed correctly using realistic CDP timing data. The primary approach
+// uses MonotonicTimeEpoch + RequestTime to stay in ResourceTiming's time base.
+func TestNetworkManagerReceivingMetric(t *testing.T) {
+	t.Parallel()
+
+	registry := k6metrics.NewRegistry()
+	k6m := k6ext.RegisterCustomMetrics(registry)
+
+	vu := k6test.NewVU(t)
+	vu.ActivateVU()
+
+	nm := &NetworkManager{
+		ctx:              vu.Context(),
+		vu:               vu,
+		customMetrics:    k6m,
+		logger:           log.NewNullLogger(),
+		eventInterceptor: &EventInterceptorMock{},
+	}
+
+	// Simulate realistic timing:
+	// MonotonicTimeEpoch is system boot time. RequestTime is monotonic seconds since boot.
+	// ReceiveHeadersEnd is ms from RequestTime to when headers arrived.
+	// responseEndWall is the MonotonicTime when LoadingFinished fired.
+	bootTime := *cdp.MonotonicTimeEpoch
+
+	// Request started 1000 seconds after boot
+	requestTimeSec := 1000.0
+	requestTimeGo := bootTime.Add(time.Duration(requestTimeSec * float64(time.Second)))
+
+	// Headers arrived 200ms after RequestTime, content download took 150ms
+	receiveHeadersEnd := 200.0
+	responseEndWall := requestTimeGo.Add(350 * time.Millisecond) // 200ms + 150ms
+
+	reqTimestamp := requestTimeGo
+	reqWallTime := requestTimeGo // offset = 0 for simplicity
+
+	req, err := NewRequest(vu.Context(), log.NewNullLogger(), NewRequestParams{
+		event: &network.EventRequestWillBeSent{
+			Request:   &network.Request{},
+			Timestamp: (*cdp.MonotonicTime)(&reqTimestamp),
+			WallTime:  (*cdp.TimeSinceEpoch)(&reqWallTime),
+		},
+	})
+	require.NoError(t, err)
+	req.responseEndWall = responseEndWall
+	// Set headersEndWall too — the primary approach should still be used.
+	req.headersEndWall = requestTimeGo.Add(200 * time.Millisecond)
+
+	resp := NewHTTPResponse(vu.Context(), req,
+		&network.Response{
+			Timing: &network.ResourceTiming{
+				RequestTime:       requestTimeSec,
+				SendStart:         10,
+				SendEnd:           20,
+				ReceiveHeadersEnd: receiveHeadersEnd,
+			},
+		},
+		(*cdp.MonotonicTime)(&reqTimestamp),
+	)
+	nm.emitResponseMetrics(resp, req)
+
+	var receivingVal float64
+	vu.AssertSamples(func(s k6metrics.Sample) {
+		if s.Metric.Name == "browser_http_req_receiving" {
+			receivingVal = s.Value
+		}
+	})
+
+	// Expect receiving ≈ 150ms (350ms total - 200ms ReceiveHeadersEnd)
+	assert.InDelta(t, 150.0, receivingVal, 1.0,
+		"receiving should be ~150ms, got %.3f", receivingVal)
+}
+
+// TestNetworkManagerReceivingMetricNoHeadersEndWall verifies that receiving is
+// correctly computed even when headersEndWall is zero (e.g. iframe cross-session
+// requests where onResponseReceived can't find the request in its map).
+func TestNetworkManagerReceivingMetricNoHeadersEndWall(t *testing.T) {
+	t.Parallel()
+
+	registry := k6metrics.NewRegistry()
+	k6m := k6ext.RegisterCustomMetrics(registry)
+
+	vu := k6test.NewVU(t)
+	vu.ActivateVU()
+
+	nm := &NetworkManager{
+		ctx:              vu.Context(),
+		vu:               vu,
+		customMetrics:    k6m,
+		logger:           log.NewNullLogger(),
+		eventInterceptor: &EventInterceptorMock{},
+	}
+
+	bootTime := *cdp.MonotonicTimeEpoch
+	requestTimeSec := 2000.0
+	requestTimeGo := bootTime.Add(time.Duration(requestTimeSec * float64(time.Second)))
+
+	receiveHeadersEnd := 100.0
+	responseEndWall := requestTimeGo.Add(250 * time.Millisecond) // 100ms + 150ms receiving
+
+	reqTimestamp := requestTimeGo
+	reqWallTime := requestTimeGo
+
+	req, err := NewRequest(vu.Context(), log.NewNullLogger(), NewRequestParams{
+		event: &network.EventRequestWillBeSent{
+			Request:   &network.Request{},
+			Timestamp: (*cdp.MonotonicTime)(&reqTimestamp),
+			WallTime:  (*cdp.TimeSinceEpoch)(&reqWallTime),
+		},
+	})
+	require.NoError(t, err)
+	req.responseEndWall = responseEndWall
+	// headersEndWall intentionally left as zero — simulates cross-session iframe
+
+	resp := NewHTTPResponse(vu.Context(), req,
+		&network.Response{
+			Timing: &network.ResourceTiming{
+				RequestTime:       requestTimeSec,
+				SendStart:         5,
+				SendEnd:           10,
+				ReceiveHeadersEnd: receiveHeadersEnd,
+			},
+		},
+		(*cdp.MonotonicTime)(&reqTimestamp),
+	)
+	nm.emitResponseMetrics(resp, req)
+
+	var receivingVal float64
+	vu.AssertSamples(func(s k6metrics.Sample) {
+		if s.Metric.Name == "browser_http_req_receiving" {
+			receivingVal = s.Value
+		}
+	})
+
+	// Expect receiving ≈ 150ms even without headersEndWall
+	assert.InDelta(t, 150.0, receivingVal, 1.0,
+		"receiving should be ~150ms even without headersEndWall, got %.3f", receivingVal)
+}
+
+// TestNetworkManagerReceivingMetricCachedResponse verifies that receiving falls
+// back to the headersEndWall/responseEndWall approach when RequestTime is zero
+// (as happens with cached responses).
+func TestNetworkManagerReceivingMetricCachedResponse(t *testing.T) {
+	t.Parallel()
+
+	registry := k6metrics.NewRegistry()
+	k6m := k6ext.RegisterCustomMetrics(registry)
+
+	vu := k6test.NewVU(t)
+	vu.ActivateVU()
+
+	nm := &NetworkManager{
+		ctx:              vu.Context(),
+		vu:               vu,
+		customMetrics:    k6m,
+		logger:           log.NewNullLogger(),
+		eventInterceptor: &EventInterceptorMock{},
+	}
+
+	now := time.Now()
+	reqTimestamp := now
+	reqWallTime := now
+
+	req, err := NewRequest(vu.Context(), log.NewNullLogger(), NewRequestParams{
+		event: &network.EventRequestWillBeSent{
+			Request:   &network.Request{},
+			Timestamp: (*cdp.MonotonicTime)(&reqTimestamp),
+			WallTime:  (*cdp.TimeSinceEpoch)(&reqWallTime),
+		},
+	})
+	require.NoError(t, err)
+
+	// Simulate cached response: RequestTime=0, but headersEndWall/responseEndWall are set
+	headersEnd := now.Add(50 * time.Millisecond)
+	responseEnd := now.Add(120 * time.Millisecond)
+	req.headersEndWall = headersEnd
+	req.responseEndWall = responseEnd
+
+	resp := NewHTTPResponse(vu.Context(), req,
+		&network.Response{
+			Timing: &network.ResourceTiming{
+				RequestTime:       0, // cached — no real network request
+				SendStart:         0,
+				SendEnd:           0,
+				ReceiveHeadersEnd: 0,
+			},
+		},
+		(*cdp.MonotonicTime)(&reqTimestamp),
+	)
+	nm.emitResponseMetrics(resp, req)
+
+	var receivingVal float64
+	receivingFound := false
+	vu.AssertSamples(func(s k6metrics.Sample) {
+		if s.Metric.Name == "browser_http_req_receiving" {
+			receivingVal = s.Value
+			receivingFound = true
+		}
+	})
+
+	require.True(t, receivingFound, "browser_http_req_receiving metric should be emitted")
+	// Expect receiving ≈ 70ms (responseEnd - headersEnd)
+	assert.False(t, math.IsNaN(receivingVal), "receiving should not be NaN")
+	assert.InDelta(t, 70.0, receivingVal, 1.0,
+		"receiving should fall back to wall-time approach for cached response, got %.3f", receivingVal)
 }

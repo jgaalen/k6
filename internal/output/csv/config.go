@@ -41,7 +41,9 @@ func NewConfig() Config {
 	return Config{
 		FileName:     null.NewString("file.csv", false),
 		SaveInterval: types.NewNullDuration(1*time.Second, false),
-		TimeFormat:   null.NewString("unix", false),
+		// Default to epoch milliseconds so CSV timestamps match browser/HTTP
+		// use-cases without requiring explicit configuration.
+		TimeFormat: null.NewString("unix_milli", false),
 	}
 }
 

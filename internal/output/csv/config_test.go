@@ -18,7 +18,7 @@ func TestNewConfig(t *testing.T) {
 	config := NewConfig()
 	assert.Equal(t, "file.csv", config.FileName.String)
 	assert.Equal(t, "1s", config.SaveInterval.String())
-	assert.Equal(t, "unix", config.TimeFormat.String)
+	assert.Equal(t, "unix_milli", config.TimeFormat.String)
 }
 
 func TestApply(t *testing.T) {
