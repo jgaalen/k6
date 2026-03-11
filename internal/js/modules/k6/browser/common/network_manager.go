@@ -449,11 +449,13 @@ func (m *NetworkManager) emitRequestFailedMetrics(req *Request) {
 	wallTime := time.Now()
 	url := req.url.String()
 
-	// Some failures, like net::ERR_BLOCKED_BY_CLIENT, are caused by client-side
-	// blockers (ad-blockers, inspector, etc.) and should not be recorded as
-	// application metrics. Skip emitting any metrics for those.
+	// Some failures should not be recorded as application metrics:
+	// - net::ERR_BLOCKED_BY_CLIENT: caused by client-side blockers (ad-blockers, inspector, etc.)
+	// - net::ERR_ABORTED: caused by the browser aborting a request (e.g. navigating away before
+	//   a resource finished loading), not an actual application error.
 	if failure := req.Failure(); failure != nil && failure.ErrorText != "" {
-		if strings.Contains(failure.ErrorText, "ERR_BLOCKED_BY_CLIENT") {
+		if strings.Contains(failure.ErrorText, "ERR_BLOCKED_BY_CLIENT") ||
+			strings.Contains(failure.ErrorText, "ERR_ABORTED") {
 			return
 		}
 	}
