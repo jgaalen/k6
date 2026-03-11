@@ -512,8 +512,7 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 				}
 				// Non-SM transactions table columns:
 				//   time, run_id, location, transaction_name, success, request_size, response_size, response_time
-				// SM transactions_sm columns:
-				//   time, scenario_name, location, node_name, thread_group_name, transaction_name, success, request_size, response_size, response_time
+				// SM transactions_sm (run_id last): time, scenario_name, location, node_name, thread_group_name, transaction_name, success, request_size, response_size, response_time, run_id
 				isSM := l.isSynthetic
 				var row []string
 				if isSM {
@@ -528,6 +527,7 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 						"",
 						"",
 						fmtInt(s.Value),
+						fmt.Sprintf("%v", l.envTags["run_id"]),
 					}
 				} else {
 					row = []string{
@@ -563,6 +563,7 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 				isSM := l.isSynthetic
 				var row []string
 				if isSM {
+					// SM transactions_sm (run_id last)
 					row = []string{
 						time.Unix(0, ts).UTC().Format(time.RFC3339Nano),
 						fmt.Sprintf("%v", l.envTags["scenario_name"]),
@@ -574,6 +575,7 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 						"",
 						"",
 						fmtInt(s.Value),
+						fmt.Sprintf("%v", l.envTags["run_id"]),
 					}
 				} else {
 					row = []string{
@@ -641,6 +643,7 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 				id := generateUUIDv7(ts)
 				// Build row per schema (includes id field)
 				if l.isSynthetic {
+					// SM requests_error_sm (existing table: run_id last): time, scenario_name, ..., id, run_id
 					row := []string{
 						time.Unix(0, ts).UTC().Format(time.RFC3339Nano), // time
 						fmt.Sprintf("%v", l.envTags["scenario_name"]),   // scenario_name
@@ -659,6 +662,7 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 						"",              // response_headers
 						responseData,    // response_data
 						id,              // id (UUIDv7 generated from measurement timestamp)
+						fmt.Sprintf("%v", l.envTags["run_id"]),          // run_id last
 					}
 					l.mu.Lock()
 					we := csv.NewWriter(l.bufErrors)
@@ -690,6 +694,11 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 					we.Flush()
 					l.mu.Unlock()
 				}
+				continue
+			}
+			// browser_errors -> requests_error(_sm)
+			if s.Metric.Name == "browser_errors" {
+				l.processBrowserError(s, ts)
 				continue
 			}
 			// WebSocket metrics -> requests_raw(_sm)
@@ -724,7 +733,7 @@ func (l *Logger) processHttpGroup(g *MetricGroup) {
 	}
 	// Map k6 HTTP metrics to requests_raw(_sm) schema
 	// Non-SM: time, run_id, location, transaction_name, sampler_name, success, request_size, response_size, response_code, response_connect_time, response_latency, response_time
-	// SM:     time, scenario_name, location, node_name, thread_group_name, transaction_name, sampler_name, success, request_size, response_size, response_code, response_connect_time, response_latency, response_time
+	// SM (existing table: run_id last): time, scenario_name, location, node_name, thread_group_name, transaction_name, sampler_name, success, request_size, response_size, response_code, response_connect_time, response_latency, response_time, run_id
 
 	// sampler_name: use path (normalized URL path if name was URL, or name itself capped at 64 chars if not)
 	samplerName := g.Tags["path"]
@@ -781,6 +790,7 @@ func (l *Logger) processHttpGroup(g *MetricGroup) {
 
 	var row []string
 	if l.isSynthetic {
+		// SM table has run_id last (existing table order)
 		row = []string{
 			time.Unix(0, g.Timestamp).UTC().Format(time.RFC3339Nano),
 			g.Tags["scenario_name"],
@@ -796,6 +806,7 @@ func (l *Logger) processHttpGroup(g *MetricGroup) {
 			connectTime,
 			latency,
 			responseTime,
+			fmt.Sprintf("%v", l.envTags["run_id"]),
 		}
 	} else {
 		row = []string{
@@ -863,6 +874,7 @@ func (l *Logger) processHttpGroup(g *MetricGroup) {
 		// Generate UUIDv7 using the measurement timestamp
 		id := generateUUIDv7(g.Timestamp)
 		if l.isSynthetic {
+			// SM requests_error_sm (existing table: run_id last): time, scenario_name, ..., id, run_id
 			erow := []string{
 				time.Unix(0, g.Timestamp).UTC().Format(time.RFC3339Nano),
 				g.Tags["scenario_name"],
@@ -881,6 +893,7 @@ func (l *Logger) processHttpGroup(g *MetricGroup) {
 				g.ErrorResHeaders, // response_headers
 				g.ErrorResBody,    // response_data
 				id,                // id (UUIDv7)
+				fmt.Sprintf("%v", l.envTags["run_id"]),
 			}
 			we := csv.NewWriter(l.bufErrors)
 			_ = we.Write(erow)
@@ -971,7 +984,7 @@ func (l *Logger) processWebSocketMetric(s metrics.Sample, ts int64) {
 
 	var row []string
 	if l.isSynthetic {
-		// SM: time, scenario_name, location, node_name, thread_group_name, transaction_name, sampler_name, success, request_size, response_size, response_code, response_connect_time, response_latency, response_time
+		// SM requests_raw_sm (existing table: run_id last)
 		row = []string{
 			time.Unix(0, ts).UTC().Format(time.RFC3339Nano),
 			tags["scenario_name"],
@@ -987,6 +1000,7 @@ func (l *Logger) processWebSocketMetric(s metrics.Sample, ts int64) {
 			"", // response_connect_time
 			"", // response_latency
 			responseTime,
+			fmt.Sprintf("%v", l.envTags["run_id"]),
 		}
 	} else {
 		// Non-SM: time, run_id, location, transaction_name, sampler_name, success, request_size, response_size, response_code, response_connect_time, response_latency, response_time
@@ -1022,6 +1036,11 @@ func (l *Logger) processCustomTrendMetric(s metrics.Sample, ts int64) {
 		tags[k] = v
 	}
 
+	// Ensure per-sample scenario tag is propagated so SM thread_group_name is set
+	if scen, ok := m["scenario"]; ok && scen != "" {
+		tags["scenario"] = fmt.Sprintf("%v", scen)
+	}
+
 	// transaction_name: only set when group tag is present (strip leading "::" if present)
 	transactionName := ""
 	if groupVal, ok := m["group"]; ok && groupVal != "" {
@@ -1049,13 +1068,13 @@ func (l *Logger) processCustomTrendMetric(s metrics.Sample, ts int64) {
 
 	var row []string
 	if l.isSynthetic {
-		// SM: time, scenario_name, location, node_name, thread_group_name, transaction_name, sampler_name, success, request_size, response_size, response_code, response_connect_time, response_latency, response_time
+		// SM requests_raw_sm (existing table: run_id last)
 		row = []string{
 			time.Unix(0, ts).UTC().Format(time.RFC3339Nano),
 			tags["scenario_name"],
 			tags["location"],
 			tags["node_name"],
-			"", // thread_group_name
+			tags["scenario"], // thread_group_name
 			transactionName,
 			samplerName,
 			success,
@@ -1065,6 +1084,7 @@ func (l *Logger) processCustomTrendMetric(s metrics.Sample, ts int64) {
 			"", // response_connect_time
 			"", // response_latency
 			responseTime,
+			fmt.Sprintf("%v", l.envTags["run_id"]),
 		}
 	} else {
 		// Non-SM: time, run_id, location, transaction_name, sampler_name, success, request_size, response_size, response_code, response_connect_time, response_latency, response_time
@@ -1088,6 +1108,83 @@ func (l *Logger) processCustomTrendMetric(s metrics.Sample, ts int64) {
 	_ = w.Write(row)
 	w.Flush()
 	l.mu.Unlock()
+}
+
+func (l *Logger) processBrowserError(s metrics.Sample, ts int64) {
+	m := s.Tags.Map()
+	errMsg := m["error"]
+	if errMsg == "" {
+		errMsg = "browser error"
+	}
+
+	// Derive sampler_name from 'name' tag or fallback to error message (capped at 64)
+	samplerName := m["name"]
+	if samplerName == "" {
+		samplerName = truncateUTF8(errMsg, 64)
+	}
+
+	// transaction_name from 'transaction' tag, fallback to 'group' tag
+	transactionName := ""
+	if txnVal := m["transaction"]; txnVal != "" {
+		transactionName = txnVal
+	} else if groupVal := m["group"]; groupVal != "" {
+		transactionName = strings.TrimPrefix(groupVal, "::")
+	}
+
+	// Generate UUIDv7
+	id := generateUUIDv7(ts)
+
+	if l.isSynthetic {
+		row := []string{
+			time.Unix(0, ts).UTC().Format(time.RFC3339Nano), // time
+			fmt.Sprintf("%v", l.envTags["scenario_name"]),   // scenario_name
+			fmt.Sprintf("%v", l.envTags["location"]),        // location
+			fmt.Sprintf("%v", l.envTags["node_name"]),       // node_name
+			m["scenario"],   // thread_group_name
+			transactionName, // transaction_name
+			samplerName,     // sampler_name
+			"",              // response_code
+			"",              // response_time
+			"",              // connection_time
+			"",              // url
+			"",              // assertions
+			errMsg,          // response_message
+			"",              // request_headers
+			"",              // response_headers
+			"",              // response_data
+			id,              // id (UUIDv7)
+			fmt.Sprintf("%v", l.envTags["run_id"]), // run_id last
+		}
+		l.mu.Lock()
+		we := csv.NewWriter(l.bufErrors)
+		_ = we.Write(row)
+		we.Flush()
+		l.mu.Unlock()
+	} else {
+		row := []string{
+			time.Unix(0, ts).UTC().Format(time.RFC3339Nano), // time
+			fmt.Sprintf("%v", l.envTags["run_id"]),          // run_id
+			fmt.Sprintf("%v", l.envTags["location"]),        // location
+			fmt.Sprintf("%v", l.envTags["node_name"]),       // node_name
+			transactionName, // transaction_name
+			samplerName,     // sampler_name
+			"",              // response_code
+			"",              // response_time
+			"",              // connection_time
+			"",              // url
+			"",              // assertions
+			errMsg,          // response_message
+			"",              // request_headers
+			"",              // response_headers
+			"",              // response_data
+			id,              // id (UUIDv7)
+		}
+		l.mu.Lock()
+		we := csv.NewWriter(l.bufErrors)
+		_ = we.Write(row)
+		we.Flush()
+		l.mu.Unlock()
+	}
 }
 
 func fmtFloat(v float64) string { return fmt.Sprintf("%v", v) }

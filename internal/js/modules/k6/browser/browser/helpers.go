@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/grafana/sobek"
 	"github.com/mstoykov/k6-taskqueue-lib/taskqueue"
@@ -14,6 +15,7 @@ import (
 	"go.k6.io/k6/internal/js/modules/k6/browser/k6ext"
 	k6common "go.k6.io/k6/js/common"
 	"go.k6.io/k6/js/promises"
+	k6metrics "go.k6.io/k6/metrics"
 )
 
 func panicIfFatalError(ctx context.Context, err error) {
@@ -87,18 +89,40 @@ func newRegExMatcher(ctx context.Context, vu moduleVU, tq *taskqueue.TaskQueue) 
 // promise runs fn in a goroutine and returns a new sobek.Promise.
 //   - If fn returns a nil error, resolves the promise with the
 //     first result value fn returns.
-//   - Otherwise, rejects the promise with the error fn returns.
+//   - Otherwise, rejects the promise with the error fn returns
+//     and emits a browser_errors metric sample.
 func promise(vu moduleVU, fn func() (result any, reason error)) *sobek.Promise {
 	p, resolve, reject := promises.New(vu)
 	go func() {
 		v, err := fn()
 		if err != nil {
+			emitBrowserError(vu, err)
 			reject(err)
 			return
 		}
 		resolve(v)
 	}()
 	return p
+}
+
+// emitBrowserError pushes a browser_errors metric sample with the error message as a tag.
+func emitBrowserError(vu moduleVU, err error) {
+	state := vu.State()
+	if state == nil || vu.browserErrors == nil {
+		return
+	}
+	tags := state.Tags.GetCurrentValues().Tags
+	tags = tags.With("error", err.Error())
+	now := time.Now()
+	k6metrics.PushIfNotDone(vu.Context(), state.Samples, k6metrics.ConnectedSamples{
+		Samples: []k6metrics.Sample{
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: vu.browserErrors, Tags: tags},
+				Value:      1,
+				Time:       now,
+			},
+		},
+	})
 }
 
 // queueTask queues the given function fn to run on the given task queue tq.

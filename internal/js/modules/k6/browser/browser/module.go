@@ -18,6 +18,7 @@ import (
 	"go.k6.io/k6/internal/js/modules/k6/browser/k6ext"
 
 	k6modules "go.k6.io/k6/js/modules"
+	k6metrics "go.k6.io/k6/metrics"
 )
 
 type (
@@ -36,6 +37,7 @@ type (
 		tracesMetadata map[string]string
 		filePersister  filePersister
 		testRunID      string
+		browserErrors  *k6metrics.Metric
 	}
 
 	// JSModule exposes the properties available to the JS script.
@@ -91,6 +93,7 @@ func (m *RootModule) NewModuleInstance(vu k6modules.VU) k6modules.Instance {
 				taskQueueRegistry: newTaskQueueRegistry(vu),
 				filePersister:     m.filePersister,
 				testRunID:         m.testRunID,
+				browserErrors:     m.browserErrors,
 			}),
 			Devices:         common.GetDevices(),
 			NetworkProfiles: common.GetNetworkProfiles(),
@@ -126,4 +129,5 @@ func (m *RootModule) initialize(vu k6modules.VU) {
 	if e, ok := initEnv.LookupEnv(env.K6TestRunID); ok && e != "" {
 		m.testRunID = e
 	}
+	m.browserErrors = initEnv.Registry.MustNewMetric("browser_errors", k6metrics.Counter)
 }
