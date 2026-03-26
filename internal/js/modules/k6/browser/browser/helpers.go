@@ -2,6 +2,7 @@ package browser
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
@@ -106,6 +107,8 @@ func promise(vu moduleVU, fn func() (result any, reason error)) *sobek.Promise {
 }
 
 // emitBrowserError pushes a browser_errors metric sample with the error message as a tag.
+// When K6_BROWSER_SCREENSHOT_ON_ERROR is enabled, it also captures a screenshot of the
+// active page and includes it as a base64-encoded "screenshot" tag on the metric.
 func emitBrowserError(vu moduleVU, err error) {
 	state := vu.State()
 	if state == nil || vu.browserErrors == nil {
@@ -113,6 +116,13 @@ func emitBrowserError(vu moduleVU, err error) {
 	}
 	tags := state.Tags.GetCurrentValues().Tags
 	tags = tags.With("error", err.Error())
+
+	if vu.screenshotOnError {
+		if screenshot := captureErrorScreenshot(vu); screenshot != "" {
+			tags = tags.With("screenshot", screenshot)
+		}
+	}
+
 	now := time.Now()
 	k6metrics.PushIfNotDone(vu.Context(), state.Samples, k6metrics.ConnectedSamples{
 		Samples: []k6metrics.Sample{
@@ -123,6 +133,31 @@ func emitBrowserError(vu moduleVU, err error) {
 			},
 		},
 	})
+}
+
+// captureErrorScreenshot takes a screenshot of the active browser page and returns
+// it as a base64-encoded PNG string. Returns empty string if screenshot cannot be taken.
+func captureErrorScreenshot(vu moduleVU) string {
+	browser, err := vu.browser()
+	if err != nil {
+		return ""
+	}
+	bCtx := browser.Context()
+	if bCtx == nil {
+		return ""
+	}
+	pages := bCtx.Pages()
+	if len(pages) == 0 {
+		return ""
+	}
+
+	opts := common.NewPageScreenshotOptions()
+	buf, err := pages[0].Screenshot(opts, nil)
+	if err != nil {
+		return ""
+	}
+
+	return base64.StdEncoding.EncodeToString(buf)
 }
 
 // queueTask queues the given function fn to run on the given task queue tq.

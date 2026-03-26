@@ -36,8 +36,9 @@ type (
 		initOnce       *sync.Once
 		tracesMetadata map[string]string
 		filePersister  filePersister
-		testRunID      string
-		browserErrors  *k6metrics.Metric
+		testRunID         string
+		browserErrors     *k6metrics.Metric
+		screenshotOnError bool
 	}
 
 	// JSModule exposes the properties available to the JS script.
@@ -94,6 +95,7 @@ func (m *RootModule) NewModuleInstance(vu k6modules.VU) k6modules.Instance {
 				filePersister:     m.filePersister,
 				testRunID:         m.testRunID,
 				browserErrors:     m.browserErrors,
+				screenshotOnError: m.screenshotOnError,
 			}),
 			Devices:         common.GetDevices(),
 			NetworkProfiles: common.GetNetworkProfiles(),
@@ -130,4 +132,7 @@ func (m *RootModule) initialize(vu k6modules.VU) {
 		m.testRunID = e
 	}
 	m.browserErrors = initEnv.Registry.MustNewMetric("browser_errors", k6metrics.Counter)
+	if v, ok := initEnv.LookupEnv(env.ScreenshotOnError); ok && v == "true" {
+		m.screenshotOnError = true
+	}
 }

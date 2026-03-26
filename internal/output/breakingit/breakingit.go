@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"compress/gzip"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/tls"
+	"encoding/hex"
 	"encoding/csv"
+	"encoding/json"
 	"fmt"
 	"io"
 	"mime/multipart"
@@ -73,9 +76,13 @@ type Logger struct {
 	batchTimer *time.Timer
 	flushing   bool // flag to prevent recursive flush calls
 
+	// pending screenshots to upsert via /upsert endpoint (low-volume)
+	pendingScreenshots [][]interface{}
+
 	// merging state
 	pendingHttpGroups map[int64]*MetricGroup // http and browser (unified)
 	cleanupStop       chan struct{}
+	batchDone         chan struct{} // closed when batchLoop exits
 	envTags           map[string]string
 	customPatterns    map[string]string
 	isSynthetic       bool
@@ -163,6 +170,7 @@ func New(params output.Params) (output.Output, error) {
 		bufErrors:         &bytes.Buffer{},
 		pendingHttpGroups: make(map[int64]*MetricGroup),
 		cleanupStop:       make(chan struct{}),
+		batchDone:         make(chan struct{}),
 		envTags:           envTags,
 		customPatterns:    customPatterns,
 		isSynthetic:       isSynthetic,
@@ -177,19 +185,34 @@ func (l *Logger) Description() string { return "breakingit" }
 func (l *Logger) Start() error        { return nil }
 
 func (l *Logger) Stop() error {
+	fmt.Fprintf(l.out, "[screenshot] Stop() called, waiting for batchLoop to finish\n")
 	l.batchTimer.Stop()
 	close(l.cleanupStop)
+	// Wait for any in-progress batchLoop flush to complete
+	<-l.batchDone
+	fmt.Fprintf(l.out, "[screenshot] batchLoop done, running final flush (pendingScreenshots=%d)\n", len(l.pendingScreenshots))
+	// Final flush to send any remaining data (including screenshots)
 	l.flush()
+	fmt.Fprintf(l.out, "[screenshot] Stop() complete\n")
 	return nil
 }
 
 func (l *Logger) batchLoop() {
-	for range l.batchTimer.C {
-		l.flush()
-		if l.isSynthetic {
-			l.batchTimer.Reset(5 * time.Second)
-		} else {
-			l.batchTimer.Reset(time.Second)
+	defer close(l.batchDone)
+	for {
+		select {
+		case _, ok := <-l.batchTimer.C:
+			if !ok {
+				return
+			}
+			l.flush()
+			if l.isSynthetic {
+				l.batchTimer.Reset(5 * time.Second)
+			} else {
+				l.batchTimer.Reset(time.Second)
+			}
+		case <-l.cleanupStop:
+			return
 		}
 	}
 }
@@ -226,7 +249,9 @@ func (l *Logger) flush() {
 		l.mu.Unlock()
 		return
 	}
-	if l.bufHTTP.Len() == 0 && l.bufVUs.Len() == 0 && l.bufTrans.Len() == 0 && l.bufErrors.Len() == 0 {
+	hasBatchData := l.bufHTTP.Len() > 0 || l.bufVUs.Len() > 0 || l.bufTrans.Len() > 0 || l.bufErrors.Len() > 0
+	hasScreenshots := len(l.pendingScreenshots) > 0
+	if !hasBatchData && !hasScreenshots {
 		l.mu.Unlock()
 		return
 	}
@@ -244,8 +269,25 @@ func (l *Logger) flush() {
 	bufErrorsSnapshot := make([]byte, l.bufErrors.Len())
 	copy(bufErrorsSnapshot, l.bufErrors.Bytes())
 	bufErrorsLen := l.bufErrors.Len()
+	// Snapshot pending screenshots
+	screenshotsSnapshot := l.pendingScreenshots
+	l.pendingScreenshots = nil
 	l.flushing = true
 	l.mu.Unlock()
+
+	// Send screenshots via upsert endpoint (separate from batch COPY path)
+	if len(screenshotsSnapshot) > 0 {
+		fmt.Fprintf(l.out, "[screenshot] flush: sending %d screenshot(s) to upsert endpoint\n", len(screenshotsSnapshot))
+		l.upsertScreenshots(screenshotsSnapshot)
+	}
+
+	// Skip batch if no COPY data
+	if !hasBatchData {
+		l.mu.Lock()
+		l.flushing = false
+		l.mu.Unlock()
+		return
+	}
 
 	// Build multipart body (reusable for retries)
 	var body bytes.Buffer
@@ -427,6 +469,36 @@ func (l *Logger) flush() {
 	if success && hasNewData {
 		// Use a goroutine to avoid blocking and prevent potential deadlock
 		go l.flush()
+	}
+}
+
+// upsertScreenshots sends screenshots to the pg-proxy upsert endpoint.
+// Uses INSERT ... ON CONFLICT DO NOTHING on the proxy side, so duplicate hashes are silently skipped.
+func (l *Logger) upsertScreenshots(rows [][]interface{}) {
+	payload := map[string]interface{}{
+		"columns": []string{"hash", "data", "mime_type", "size_bytes"},
+		"rows":    rows,
+	}
+	jsonBody, err := json.Marshal(payload)
+	if err != nil {
+		fmt.Fprintf(l.out, "screenshot upsert marshal error: %v\n", err)
+		return
+	}
+	fmt.Fprintf(l.out, "[screenshot] upsert: POSTing %d bytes to %s/upsert/public.sm_screenshots\n", len(jsonBody), l.proxyURL)
+	req, _ := http.NewRequest(http.MethodPost, l.proxyURL+"/upsert/public.sm_screenshots", bytes.NewReader(jsonBody))
+	req.Header.Set("Authorization", "Bearer "+l.token)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := l.httpClient.Do(req)
+	if err != nil {
+		fmt.Fprintf(l.out, "screenshot upsert request error: %v\n", err)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		fmt.Fprintf(l.out, "screenshot upsert error status=%d body=%s\n", resp.StatusCode, string(b))
+	} else {
+		fmt.Fprintf(l.out, "screenshot upsert ok rows=%d json_bytes=%d\n", len(rows), len(jsonBody))
 	}
 }
 
@@ -1131,9 +1203,24 @@ func (l *Logger) processBrowserError(s metrics.Sample, ts int64) {
 		transactionName = strings.TrimPrefix(groupVal, "::")
 	}
 
+	// screenshot from the "screenshot" tag (base64-encoded PNG when K6_BROWSER_SCREENSHOT_ON_ERROR is enabled)
+	screenshot := m["screenshot"]
+	screenshotHash := ""
+	if screenshot != "" {
+		// Calculate SHA-256 hash of the screenshot data for deduplication
+		h := sha256.Sum256([]byte(screenshot))
+		screenshotHash = hex.EncodeToString(h[:])
+		fmt.Fprintf(l.out, "[screenshot] received browser error with screenshot len=%d hash=%s\n", len(screenshot), screenshotHash)
+	} else {
+		fmt.Fprintf(l.out, "[screenshot] received browser error WITHOUT screenshot (tag count=%d)\n", len(m))
+	}
+
 	// Generate UUIDv7
 	id := generateUUIDv7(ts)
 
+	// Write screenshot + error row under a single lock to ensure both are
+	// captured in the same flush snapshot (prevents the error row referencing
+	// a hash that was never sent to sm_screenshots).
 	if l.isSynthetic {
 		row := []string{
 			time.Unix(0, ts).UTC().Format(time.RFC3339Nano), // time
@@ -1151,11 +1238,17 @@ func (l *Logger) processBrowserError(s metrics.Sample, ts int64) {
 			errMsg,          // response_message
 			"",              // request_headers
 			"",              // response_headers
-			"",              // response_data
+			screenshotHash,  // response_data (screenshot hash reference)
 			id,              // id (UUIDv7)
 			fmt.Sprintf("%v", l.envTags["run_id"]), // run_id last
 		}
 		l.mu.Lock()
+		if screenshotHash != "" {
+			l.pendingScreenshots = append(l.pendingScreenshots, []interface{}{
+				screenshotHash, screenshot, "image/png", len(screenshot),
+			})
+			fmt.Fprintf(l.out, "[screenshot] queued for upsert, pendingScreenshots=%d\n", len(l.pendingScreenshots))
+		}
 		we := csv.NewWriter(l.bufErrors)
 		_ = we.Write(row)
 		we.Flush()
@@ -1176,10 +1269,15 @@ func (l *Logger) processBrowserError(s metrics.Sample, ts int64) {
 			errMsg,          // response_message
 			"",              // request_headers
 			"",              // response_headers
-			"",              // response_data
+			screenshotHash,  // response_data (screenshot hash reference)
 			id,              // id (UUIDv7)
 		}
 		l.mu.Lock()
+		if screenshotHash != "" {
+			l.pendingScreenshots = append(l.pendingScreenshots, []interface{}{
+				screenshotHash, screenshot, "image/png", len(screenshot),
+			})
+		}
 		we := csv.NewWriter(l.bufErrors)
 		_ = we.Write(row)
 		we.Flush()

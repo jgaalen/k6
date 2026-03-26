@@ -24,8 +24,9 @@ type moduleVU struct {
 
 	filePersister
 
-	testRunID     string
-	browserErrors *k6metrics.Metric
+	testRunID         string
+	browserErrors     *k6metrics.Metric
+	screenshotOnError bool
 }
 
 // browser returns the VU browser instance for the current iteration.
