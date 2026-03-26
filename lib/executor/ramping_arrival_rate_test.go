@@ -78,9 +78,7 @@ func TestRampingArrivalRateRunCorrectRate(t *testing.T) {
 	defer test.cancel()
 
 	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		// check that we got around the amount of VU iterations as we would expect
 		var currentCount int64
 
@@ -95,7 +93,7 @@ func TestRampingArrivalRateRunCorrectRate(t *testing.T) {
 		time.Sleep(time.Second)
 		currentCount = atomic.SwapInt64(&count, 0)
 		assert.InDelta(t, 50, currentCount, 3)
-	}()
+	})
 	engineOut := make(chan metrics.SampleContainer, 1000)
 	require.NoError(t, test.executor.Run(test.ctx, engineOut))
 	wg.Wait()
@@ -282,7 +280,7 @@ func BenchmarkRampingArrivalRateRun(b *testing.B) {
 			testRunState := getTestRunState(b, lib.Options{}, runner)
 			es := lib.NewExecutionState(
 				testRunState, mustNewExecutionTuple(nil, nil),
-				uint64(tc.prealloc.Int64), uint64(tc.prealloc.Int64), //nolint:gosec
+				uint64(tc.prealloc.Int64), uint64(tc.prealloc.Int64),
 			)
 
 			// an high target to get the highest rate
@@ -577,8 +575,8 @@ func sqrtRat(x *big.Rat) *big.Rat {
 	var z, a, b big.Rat
 	var ns, ds big.Int
 	ni, di := x.Num(), x.Denom()
-	z.SetFrac(ns.Rsh(ni, uint(ni.BitLen())/2), ds.Rsh(di, uint(di.BitLen())/2)) //nolint:gosec
-	for i := 10; i > 0; i-- {                                                   // TODO: better termination
+	z.SetFrac(ns.Rsh(ni, uint(ni.BitLen())/2), ds.Rsh(di, uint(di.BitLen())/2))
+	for i := 10; i > 0; i-- { // TODO: better termination
 		a.Sub(a.Mul(&z, &z), x)
 		f, _ := a.Float64()
 		if f == 0 {

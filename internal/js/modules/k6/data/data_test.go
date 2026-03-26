@@ -51,12 +51,10 @@ func TestSharedArraysLoadOrStoreBuildsOnce(t *testing.T) {
 
 	var wg sync.WaitGroup
 	const goroutines = 10
-	for i := 0; i < goroutines; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range goroutines {
+		wg.Go(func() {
 			_, _ = arrays.loadOrStore("shared", builder)
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -93,10 +91,8 @@ func TestNewSharedArrayFromConcurrentMultiVU(t *testing.T) {
 	var wg sync.WaitGroup
 	const vus = 10
 
-	for i := 0; i < vus; i++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+	for range vus {
+		wg.Go(func() {
 			runtime := modulestest.NewRuntime(t)
 			dataModule, ok := root.NewModuleInstance(runtime.VU).(*Data)
 			require.True(t, ok)
@@ -107,7 +103,7 @@ func TestNewSharedArrayFromConcurrentMultiVU(t *testing.T) {
 			}
 			_, err := dataModule.NewSharedArrayFrom(runtime.VU.Runtime(), "concurrent-test", reader)
 			require.NoError(t, err)
-		}()
+		})
 	}
 
 	wg.Wait()

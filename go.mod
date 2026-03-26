@@ -1,8 +1,8 @@
 module go.k6.io/k6
 
-go 1.24.0
+go 1.25.0
 
-toolchain go1.24.13
+toolchain go1.25.8
 
 require (
 	buf.build/gen/go/prometheus/prometheus/protocolbuffers/go v1.36.11-20251118093737-4105057cc7d4.1
@@ -22,8 +22,8 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/gorilla/websocket v1.5.3
 	github.com/grafana/k6provider v0.2.0
-	github.com/grafana/sobek v0.0.0-20260121195222-d8d9202018c5
-	github.com/grafana/xk6-dashboard v0.7.13
+	github.com/grafana/sobek v0.0.0-20260219184149-bdae4a158e94
+	github.com/grafana/xk6-dashboard v0.8.1
 	github.com/grafana/xk6-redis v0.3.6
 	github.com/grpc-ecosystem/go-grpc-middleware v1.4.0
 	github.com/influxdata/influxdb1-client v0.0.0-20190402204710-8ff2fc3824fc
@@ -43,16 +43,16 @@ require (
 	github.com/spf13/pflag v1.0.5
 	github.com/stretchr/testify v1.11.1
 	github.com/tidwall/gjson v1.18.0
-	go.opentelemetry.io/otel v1.38.0
+	go.opentelemetry.io/otel v1.40.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetricgrpc v1.38.0
 	go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp v1.38.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace v1.38.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracegrpc v1.38.0
 	go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp v1.38.0
-	go.opentelemetry.io/otel/metric v1.38.0
-	go.opentelemetry.io/otel/sdk v1.38.0
-	go.opentelemetry.io/otel/sdk/metric v1.38.0
-	go.opentelemetry.io/otel/trace v1.38.0
+	go.opentelemetry.io/otel/metric v1.40.0
+	go.opentelemetry.io/otel/sdk v1.40.0
+	go.opentelemetry.io/otel/sdk/metric v1.40.0
+	go.opentelemetry.io/otel/trace v1.40.0
 	go.opentelemetry.io/proto/otlp v1.9.0
 	go.uber.org/goleak v1.3.0
 	golang.org/x/crypto v0.47.0
@@ -68,6 +68,7 @@ require (
 )
 
 require (
+	github.com/grafana/xk6-dashboard-assets v0.1.2 // indirect
 	github.com/jhump/protoreflect/v2 v2.0.0-beta.1 // indirect
 	github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 // indirect
 	go.yaml.in/yaml/v2 v2.4.2 // indirect
