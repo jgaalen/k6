@@ -15,7 +15,6 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/grafana/k6provider"
 
-	"go.k6.io/k6/cloudapi"
 	"go.k6.io/k6/cmd/state"
 	"go.k6.io/k6/errext"
 	"go.k6.io/k6/errext/exitcodes"
@@ -216,22 +215,6 @@ func formatDependencies(deps map[string]string) string {
 		fmt.Fprintf(buffer, "%s:%s ", dep, version)
 	}
 	return strings.Trim(buffer.String(), " ")
-}
-
-// extractToken gets the cloud token required to access the build service
-// from the environment or from the config file
-func extractToken(gs *state.GlobalState) (string, error) {
-	diskConfig, err := readDiskConfig(gs)
-	if err != nil {
-		return "", err
-	}
-
-	config, _, err := cloudapi.GetConsolidatedConfig(diskConfig.Collectors["cloud"], gs.Env, "", nil, nil)
-	if err != nil {
-		return "", err
-	}
-
-	return config.Token.String, nil
 }
 
 func processUseDirectives(name string, text []byte, deps dependencies) error {

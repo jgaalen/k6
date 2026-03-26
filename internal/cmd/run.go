@@ -27,7 +27,6 @@ import (
 	"go.k6.io/k6/internal/lib/summary"
 	"go.k6.io/k6/internal/lib/trace"
 	"go.k6.io/k6/internal/metrics/engine"
-	"go.k6.io/k6/internal/output/cloud"
 	summaryoutput "go.k6.io/k6/internal/output/summary"
 	"go.k6.io/k6/internal/ui/pb"
 	"go.k6.io/k6/js/common"
@@ -225,8 +224,7 @@ func (c *cmdRun) run(cmd *cobra.Command, args []string) (err error) {
 		summaryMeta := summary.Meta{
 			Script: string(test.source.Data),
 			IsCloud: slices.ContainsFunc(outputs, func(o output.Output) bool {
-				_, isCloud := o.(*cloud.Output)
-				return isCloud
+				return isCloudOutput(o)
 			}),
 		}
 
