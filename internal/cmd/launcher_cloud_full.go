@@ -3,8 +3,8 @@
 package cmd
 
 import (
-	"go.k6.io/k6/cloudapi"
-	"go.k6.io/k6/cmd/state"
+	"go.k6.io/k6/v2/cloudapi"
+	"go.k6.io/k6/v2/cmd/state"
 )
 
 // extractToken gets the cloud token required to access the build service
@@ -15,7 +15,7 @@ func extractToken(gs *state.GlobalState) (string, error) {
 		return "", err
 	}
 
-	config, _, err := cloudapi.GetConsolidatedConfig(diskConfig.Collectors["cloud"], gs.Env, "", nil, nil)
+	config, _, err := cloudapi.GetConsolidatedConfig(diskConfig.Collectors["cloud"], gs.Env, "", nil)
 	if err != nil {
 		return "", err
 	}

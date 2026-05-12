@@ -5,11 +5,11 @@ import (
 	"sort"
 	"strings"
 
-	"go.k6.io/k6/cmd/state"
-	"go.k6.io/k6/lib"
-	"go.k6.io/k6/output"
+	"go.k6.io/k6/v2/cmd/state"
+	"go.k6.io/k6/v2/lib"
+	"go.k6.io/k6/v2/output"
 
-	"github.com/grafana/xk6-dashboard/dashboard"
+	"go.k6.io/k6/v2/internal/dashboard"
 )
 
 // builtinOutput marks the available builtin outputs.
@@ -111,7 +111,7 @@ func createOutputs(
 		// with building an archive and setting it on the output instance.
 		if !test.derivedConfig.NoArchiveUpload.Bool {
 			if archiveOut, ok := out.(output.WithArchive); ok {
-				archiveOut.SetArchive(test.initRunner.MakeArchive())
+				archiveOut.SetArchive(test.makeArchive())
 			}
 		}
 

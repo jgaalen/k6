@@ -6,14 +6,13 @@ import (
 	"errors"
 	"fmt"
 
-	"go.k6.io/k6/ext"
-	"go.k6.io/k6/internal/output/breakingit"
-	"go.k6.io/k6/internal/output/csv"
-	"go.k6.io/k6/internal/output/influxdb"
-	"go.k6.io/k6/internal/output/json"
-	"go.k6.io/k6/output"
-
-	"github.com/grafana/xk6-dashboard/dashboard"
+	"go.k6.io/k6/v2/ext"
+	"go.k6.io/k6/v2/internal/dashboard"
+	"go.k6.io/k6/v2/internal/output/breakingit"
+	"go.k6.io/k6/v2/internal/output/csv"
+	"go.k6.io/k6/v2/internal/output/influxdb"
+	"go.k6.io/k6/v2/internal/output/json"
+	"go.k6.io/k6/v2/output"
 )
 
 // getAllOutputConstructors returns the lean set of output constructors,

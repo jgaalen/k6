@@ -3,7 +3,7 @@
 package cmd
 
 import (
-	"go.k6.io/k6/cmd/state"
+	"go.k6.io/k6/v2/cmd/state"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"

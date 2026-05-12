@@ -3,8 +3,8 @@
 package cmd
 
 import (
-	"go.k6.io/k6/internal/output/cloud"
-	"go.k6.io/k6/output"
+	"go.k6.io/k6/v2/internal/output/cloud"
+	"go.k6.io/k6/v2/output"
 )
 
 // isCloudOutput returns true if the given output is the cloud output.

@@ -23,8 +23,8 @@ import (
 	"unicode/utf8"
 
 	"github.com/gofrs/uuid/v5"
-	"go.k6.io/k6/metrics"
-	"go.k6.io/k6/output"
+	"go.k6.io/k6/v2/metrics"
+	"go.k6.io/k6/v2/output"
 )
 
 // MetricGroup groups samples by timestamp
