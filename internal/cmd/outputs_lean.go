@@ -7,21 +7,22 @@ import (
 	"fmt"
 
 	"go.k6.io/k6/v2/ext"
-	"go.k6.io/k6/v2/internal/dashboard"
 	"go.k6.io/k6/v2/internal/output/breakingit"
 	"go.k6.io/k6/v2/internal/output/csv"
-	"go.k6.io/k6/v2/internal/output/influxdb"
 	"go.k6.io/k6/v2/internal/output/json"
 	"go.k6.io/k6/v2/output"
 )
 
 // getAllOutputConstructors returns the lean set of output constructors,
-// excluding cloud, OpenTelemetry, and Prometheus remote write outputs.
+// excluding cloud, OpenTelemetry, Prometheus remote write, InfluxDB,
+// and the web dashboard outputs.
 func getAllOutputConstructors() (map[string]output.Constructor, error) {
 	result := map[string]output.Constructor{
-		builtinOutputJSON.String():     json.New,
-		builtinOutputCSV.String():      csv.New,
-		builtinOutputInfluxdb.String(): influxdb.New,
+		builtinOutputJSON.String(): json.New,
+		builtinOutputCSV.String():  csv.New,
+		builtinOutputInfluxdb.String(): func(_ output.Params) (output.Output, error) {
+			return nil, errors.New("the influxdb output is not available in this lean build of k6")
+		},
 		builtinOutputKafka.String(): func(_ output.Params) (output.Output, error) {
 			return nil, errors.New("the kafka output was deprecated in k6 v0.32.0 and removed in k6 v0.34.0, " +
 				"please use the new xk6 kafka output extension instead - https://github.com/k6io/xk6-output-kafka")
@@ -50,7 +51,9 @@ func getAllOutputConstructors() (map[string]output.Constructor, error) {
 		builtinOutputOpentelemetry.String(): func(_ output.Params) (output.Output, error) {
 			return nil, errors.New("the opentelemetry output is not available in this lean build of k6")
 		},
-		"web-dashboard":                    dashboard.New,
+		"web-dashboard": func(_ output.Params) (output.Output, error) {
+			return nil, errors.New("the web-dashboard output is not available in this lean build of k6")
+		},
 		builtinOutputTimescaledbBreakingit.String(): breakingit.New,
 	}
 

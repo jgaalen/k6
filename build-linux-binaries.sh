@@ -13,11 +13,13 @@ echo "--- Output directory: ${OUT_DIR}"
 
 mkdir -p "$OUT_DIR"
 
+LDFLAGS='-s -w'
+
 build_linux() {
     local arch="$1"
     local name="k6-linux-${arch}-breakingit"
     echo "Building ${name}..."
-    GOOS=linux GOARCH="${arch}" CGO_ENABLED=0 go build -tags lean -trimpath -o "${OUT_DIR}/${name}" .
+    GOOS=linux GOARCH="${arch}" CGO_ENABLED=0 go build -tags lean -trimpath -ldflags "${LDFLAGS}" -o "${OUT_DIR}/${name}" .
     echo "  -> ${OUT_DIR}/${name}"
 }
 
@@ -25,7 +27,7 @@ build_darwin() {
     local arch="$1"
     local name="k6-darwin-${arch}-breakingit"
     echo "Building ${name}..."
-    GOOS=darwin GOARCH="${arch}" CGO_ENABLED=0 go build -tags lean -trimpath -o "${OUT_DIR}/${name}" .
+    GOOS=darwin GOARCH="${arch}" CGO_ENABLED=0 go build -tags lean -trimpath -ldflags "${LDFLAGS}" -o "${OUT_DIR}/${name}" .
     echo "  -> ${OUT_DIR}/${name}"
 }
 

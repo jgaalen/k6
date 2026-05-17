@@ -1,3 +1,5 @@
+//go:build !lean
+
 // Package api contains the REST API implementation for k6.
 // It also registers the services endpoints like pprof
 package api

@@ -12,7 +12,6 @@ import (
 
 	"github.com/fatih/color"
 	"github.com/sirupsen/logrus"
-	"go.k6.io/k6/v2/internal/dashboard"
 	"golang.org/x/term"
 
 	"gopkg.in/yaml.v3"
@@ -137,7 +136,7 @@ func printExecutionDescription(
 			case engine.IngesterDescription, lib.GroupSummaryDescription, summary.OutputName:
 				continue
 			}
-			if after, ok := strings.CutPrefix(desc, dashboard.OutputName); ok {
+			if after, ok := strings.CutPrefix(desc, webDashboardOutputName); ok {
 				fmt.Fprintf(buf, " web dashboard:%s\n", valueColor.Sprint(after))
 
 				continue

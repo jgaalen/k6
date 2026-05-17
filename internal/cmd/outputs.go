@@ -8,9 +8,12 @@ import (
 	"go.k6.io/k6/v2/cmd/state"
 	"go.k6.io/k6/v2/lib"
 	"go.k6.io/k6/v2/output"
-
-	"go.k6.io/k6/v2/internal/dashboard"
 )
+
+// webDashboardOutputName matches dashboard.OutputName. Duplicated here so that
+// shared code can reference it without importing internal/dashboard, which
+// embeds the dashboard UI assets and is excluded from lean builds.
+const webDashboardOutputName = "web-dashboard"
 
 // builtinOutput marks the available builtin outputs.
 //
@@ -68,7 +71,7 @@ func createOutputs(
 
 	outputs := test.derivedConfig.Out
 	if test.derivedConfig.WebDashboard.Bool {
-		outputs = append(outputs, dashboard.OutputName)
+		outputs = append(outputs, webDashboardOutputName)
 	}
 
 	result := make([]output.Output, 0, len(outputs))
