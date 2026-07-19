@@ -12,7 +12,7 @@ func TestBuiltinOutputString(t *testing.T) {
 		"cloud", "csv", "datadog", "experimental-prometheus-rw",
 		"influxdb", "json", "kafka", "statsd",
 		"experimental-opentelemetry", "opentelemetry",
-		"summary",
+		"summary", "timescaledb-breakingit",
 	}
 	assert.Equal(t, exp, builtinOutputStrings())
 }

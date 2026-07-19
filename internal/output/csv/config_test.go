@@ -82,14 +82,14 @@ func TestParseArg(t *testing.T) {
 			config: Config{
 				FileName:     null.StringFrom("test_file.csv"),
 				SaveInterval: types.NewNullDuration(1*time.Second, false),
-				TimeFormat:   null.NewString("unix", false),
+				TimeFormat:   null.NewString("unix_milli", false),
 			},
 		},
 		"saveInterval=5s": {
 			config: Config{
 				FileName:     null.NewString("file.csv", false),
 				SaveInterval: types.NullDurationFrom(5 * time.Second),
-				TimeFormat:   null.NewString("unix", false),
+				TimeFormat:   null.NewString("unix_milli", false),
 			},
 		},
 		"filename=test.csv,saveInterval=5s": {

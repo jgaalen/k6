@@ -404,8 +404,8 @@ func TestRun(t *testing.T) {
 			fileReaderFunc: readUnCompressedFile,
 			timeFormat:     "",
 			outputContent: "metric_name,timestamp,metric_value,check,error,extra_tags,metadata,error_req_headers,error_req_body,error_res_headers,error_res_body\n" +
-				"my_metric,1562324643,1.000000,val1,val3,url=val2,,,,,\n" +
-				"my_metric,1562324644,1.000000,val1,val3,tag4=val4&url=val2&vu=1,,,,,\n",
+				"my_metric,1562324643000,1.000000,val1,val3,url=val2,,,,,\n" +
+				"my_metric,1562324644000,1.000000,val1,val3,tag4=val4&url=val2&vu=1,,,,,\n",
 		},
 		{
 			samples: []metrics.SampleContainer{
