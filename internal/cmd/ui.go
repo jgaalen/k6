@@ -334,7 +334,6 @@ func showProgress(ctx context.Context, gs *state.GlobalState, pbs []*pb.Progress
 		}
 	}
 
-	// TODO: make configurable?
 	updateFreq := 1 * time.Second
 	var stdoutFD int
 	if gs.Stdout.IsTTY {
@@ -350,6 +349,16 @@ func showProgress(ctx context.Context, gs *state.GlobalState, pbs []*pb.Progress
 			gs.Stderr.PersistentText = nil
 			gs.OutMutex.Unlock()
 		}()
+	}
+
+	// Allow overriding how often progress is rendered, e.g. to reduce log
+	// noise for non-interactive runs (K6_PROGRESS_UPDATE_INTERVAL=1m).
+	if v := gs.Env["K6_PROGRESS_UPDATE_INTERVAL"]; v != "" {
+		if d, err := time.ParseDuration(v); err == nil && d > 0 {
+			updateFreq = d
+		} else {
+			logger.Warnf("invalid K6_PROGRESS_UPDATE_INTERVAL %q, using default %s", v, updateFreq)
+		}
 	}
 
 	var winch chan os.Signal
