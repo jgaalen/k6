@@ -335,6 +335,19 @@ func (m *NetworkManager) emitResponseMetrics(resp *Response, req *Request) {
 		durationMs = k6metrics.D(wallTime.Sub(req.wallTime))
 	}
 
+	// Requests served from cache (disk/memory/prefetch cache or a service
+	// worker) involved no network activity, so they are not emitted as
+	// request metrics at all. Emitting them is also actively misleading:
+	// Chromium echoes the ResourceTiming of the ORIGINAL network fetch for
+	// cached responses, so the phase math above yields durations spanning
+	// the time since that original fetch (observed as multi-second
+	// "response times" for assets reused across pages).
+	if fromCache || fromPreCache || fromSvcWrk || req.fromMemoryCache {
+		m.logger.Debugf("NetworkManager:emitResponseMetrics",
+			"skipping cache-served request url:%s method:%s", url, req.method)
+		return
+	}
+
 	pushIfNotDone(m.vu.Context(), m.logger, state.Samples, k6metrics.ConnectedSamples{
 		Samples: []k6metrics.Sample{
 			{
