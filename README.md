@@ -31,6 +31,15 @@
     <a href="https://github.com/orgs/grafana/projects/443/views/1">Public Roadmap</a>
 </p>
 
+> [!IMPORTANT]
+> ## Breaking-IT fork notice
+>
+> This repository is a modified version of [Grafana k6](https://github.com/grafana/k6),
+> maintained by Breaking-IT for BreakTest integrations. The complete source code, including
+> Breaking-IT's modifications, is available here under the GNU Affero General Public License
+> v3.0. See [LICENSE.md](LICENSE.md) and [FORK.md](FORK.md) for the fork-specific changes and
+> source-release policy.
+
 <br/>
 <img src="assets/github-hr.png" alt="---" />
 <br/>
