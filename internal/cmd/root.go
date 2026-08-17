@@ -84,10 +84,11 @@ func ExecuteWithGlobalState(gs *state.GlobalState) {
 type rootCommand struct {
 	globalState *state.GlobalState
 
-	cmd            *cobra.Command
-	stopLoggersCh  chan struct{}
-	loggersWg      sync.WaitGroup
-	loggerIsRemote bool
+	cmd                *cobra.Command
+	stopLoggersCh      chan struct{}
+	loggersWg          sync.WaitGroup
+	loggerIsRemote     bool
+	enableCloudLogPush bool
 }
 
 // newRootCommand creates a root command with a default launcher
@@ -148,14 +149,20 @@ func (c *rootCommand) persistentPreRunE(cmd *cobra.Command, _ []string) error {
 		return errext.WithExitCodeIfNone(errAlreadyReported, exitcodes.InvalidConfig)
 	}
 
-	// For 'k6 cloud run --local-execution', automatically register the cloud secret source
-	// so scripts can call secrets.get() without any extra flags.
-	// This must happen before setupLoggers, which calls createSecretSources internally.
+	// For 'k6 cloud run --local-execution', wire up the cloud secret source and
+	// the cloud log push. Both must happen before setupLoggers, which calls
+	// createSecretSources and registers the log pusher on the logger.
 	if isCloudRunWithLocalExecution(cmd) {
-		f := cmd.Flag("no-cloud-secrets")
-		if f == nil || f.Value.String() != "true" {
+		// Register the cloud secret source so scripts can call secrets.get()
+		// without any extra flags.
+		if f := cmd.Flag("no-cloud-secrets"); f == nil || f.Value.String() != "true" {
 			c.globalState.Flags.SecretSource = append(c.globalState.Flags.SecretSource, "cloud")
 		}
+
+		// Push k6's own logs to the cloud unless --no-cloud-logs is set; the
+		// decision is applied in setupLoggers.
+		f := cmd.Flag("no-cloud-logs")
+		c.enableCloudLogPush = f == nil || f.Value.String() != "true"
 	}
 
 	err := c.setupLoggers(c.stopLoggersCh)
@@ -412,6 +419,10 @@ func (c *rootCommand) setupLoggers(stop <-chan struct{}) error {
 		ctx, cancel = context.WithCancel(ctx)
 		c.setLoggerHook(ctx, hook)
 	}
+
+	// Attach the cloud log pusher after the secrets-redaction hook so it only
+	// ever observes redacted entries (see setupCloudLogPusher).
+	c.setupCloudLogPusher(stop)
 
 	// Sometimes the Go runtime uses the standard log output to
 	// log some messages directly.
