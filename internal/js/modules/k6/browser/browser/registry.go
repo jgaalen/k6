@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"go.opentelemetry.io/otel/attribute"
 	oteltrace "go.opentelemetry.io/otel/trace"
@@ -63,6 +64,21 @@ func (r *pidRegistry) Pids() []int {
 type remoteRegistry struct {
 	isRemote bool
 	wsURLs   []string
+
+	mu                   sync.Mutex
+	endpoints            []remoteBrowserEndpoint
+	nextEndpoint         int
+	activeContexts       int
+	maxActiveContexts    int
+	minAvailableMemoryMB int
+	minAvailableShmMB    int
+	pollInterval         time.Duration
+	endpointCooldown     time.Duration
+	resourceProbe        browserResourceProbe
+	waitingContexts      int
+	admissionMetrics     *browserAdmissionMetrics
+	lastBlockedReason    string
+	lastBlockedLog       time.Time
 }
 
 // newRemoteRegistry will create a new RemoteRegistry. This will
@@ -81,11 +97,13 @@ func newRemoteRegistry(envLookup env.LookupFunc) (*remoteRegistry, error) {
 	if isRemote {
 		r.isRemote = isRemote
 		r.wsURLs = wsURLs
-		return r, nil
+	} else {
+		r.isRemote, r.wsURLs = checkForBrowserWSURLs(envLookup)
 	}
 
-	r.isRemote, r.wsURLs = checkForBrowserWSURLs(envLookup)
-
+	if err := r.configureAdmission(envLookup); err != nil {
+		return nil, err
+	}
 	return r, nil
 }
 
@@ -179,6 +197,8 @@ type browserRegistry struct {
 
 	mu sync.RWMutex
 	m  map[int64]*common.Browser
+	// leases tracks admission capacity held by each managed browser iteration.
+	leases map[int64]*browserLease
 	// userManaged holds browsers created via chromium.connectOverCDP, keyed by
 	// iteration. Unlike m (browsers k6 launches/connects from scenario options),
 	// these are connected by the script at runtime. k6 still sweeps them on
@@ -189,7 +209,7 @@ type browserRegistry struct {
 	buildFn browserBuildFunc
 }
 
-type browserBuildFunc func(ctx, vuCtx context.Context) (*common.Browser, error)
+type browserBuildFunc func(ctx, vuCtx context.Context) (*common.Browser, *browserLease, error)
 
 // newBrowserRegistry should only take a background context, not a context from
 // k6 (i.e. vu). The reason for this is that we want to control the chromium
@@ -208,7 +228,10 @@ func newBrowserRegistry(
 	tracesMetadata map[string]string,
 ) *browserRegistry {
 	bt := chromium.NewBrowserType(vu)
-	builder := func(ctx, vuCtx context.Context) (*common.Browser, error) {
+	builder := func(ctx, vuCtx context.Context) (*common.Browser, *browserLease, error) {
+		if remote.admissionEnabled() {
+			return buildAdmittedBrowser(ctx, vuCtx, vu, bt, remote, pids)
+		}
 		var (
 			err                    error
 			b                      *common.Browser
@@ -218,24 +241,25 @@ func newBrowserRegistry(
 		if isRemoteBrowser {
 			b, err = bt.Connect(ctx, vuCtx, wsURL)
 			if err != nil {
-				return nil, err //nolint:wrapcheck
+				return nil, nil, err //nolint:wrapcheck
 			}
 		} else {
 			var pid int
 			b, pid, err = bt.Launch(ctx, vuCtx)
 			if err != nil {
-				return nil, err //nolint:wrapcheck
+				return nil, nil, err //nolint:wrapcheck
 			}
 			pids.registerPid(pid)
 		}
 
-		return b, nil
+		return b, nil, nil
 	}
 
 	r := &browserRegistry{
 		vu:             vu,
 		tracesMetadata: tracesMetadata,
 		m:              make(map[int64]*common.Browser),
+		leases:         make(map[int64]*browserLease),
 		userManaged:    make(map[int64][]*common.Browser),
 		buildFn:        builder,
 	}
@@ -321,16 +345,19 @@ func (r *browserRegistry) handleIterEvents(
 			tracerCtx := common.WithTracer(r.vu.Context(), r.tr.tracer)
 			tracedCtx := r.tr.startIterationTrace(tracerCtx, data)
 
-			b, err := r.buildFn(ctx, tracedCtx)
+			b, lease, err := r.buildFn(ctx, tracedCtx)
 			if err != nil {
 				e.Done()
+				if vuCtx.Err() != nil {
+					continue
+				}
 				k6ext.Abortf(vuCtx, "error building browser on IterStart: %v", err)
 				// Continue so we don't block the k6 event system producer.
 				// Test will be aborted by k6, which will previously send the
 				// 'Exit' event so browser resources cleanup can be guaranteed.
 				continue
 			}
-			r.setBrowser(data.Iteration, b)
+			r.setBrowser(data.Iteration, b, lease)
 		case k6event.IterEnd:
 			// Always sweep user-managed browsers and end any iteration trace,
 			// even for non-browser iterations (connectOverCDP runs in
@@ -378,11 +405,14 @@ func (r *browserRegistry) handleExitEvent(exitCh <-chan *k6event.Event, unsubscr
 	r.stopTracesRegistry()
 }
 
-func (r *browserRegistry) setBrowser(id int64, b *common.Browser) {
+func (r *browserRegistry) setBrowser(id int64, b *common.Browser, lease *browserLease) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	r.m[id] = b
+	if lease != nil {
+		r.leases[id] = lease
+	}
 }
 
 func (r *browserRegistry) getBrowser(id int64) (*common.Browser, error) {
@@ -404,6 +434,10 @@ func (r *browserRegistry) deleteBrowser(id int64) {
 		b.Close()
 		delete(r.m, id)
 	}
+	if lease, ok := r.leases[id]; ok {
+		lease.release()
+		delete(r.leases, id)
+	}
 }
 
 // This is only used in a test. Avoids having to manipulate the mutex in the
@@ -422,6 +456,10 @@ func (r *browserRegistry) clear() {
 	for id, b := range r.m {
 		b.Close()
 		delete(r.m, id)
+		if lease, ok := r.leases[id]; ok {
+			lease.release()
+			delete(r.leases, id)
+		}
 	}
 	for iter, browsers := range r.userManaged {
 		for _, b := range browsers {

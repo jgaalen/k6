@@ -39,6 +39,26 @@ const (
 	// BrowserGlobalTimeout is an environment variable that can be used
 	// to set the global timeout for the browser.
 	BrowserGlobalTimeout = "K6_BROWSER_TIMEOUT"
+
+	// BrowserMaxActiveContexts caps the number of managed browser contexts
+	// that may be active at once across all VUs.
+	BrowserMaxActiveContexts = "K6_BROWSER_MAX_ACTIVE_CONTEXTS"
+
+	// BrowserMinAvailableMemoryMB pauses new managed browser contexts while
+	// system available memory is below this many MiB.
+	BrowserMinAvailableMemoryMB = "K6_BROWSER_MIN_AVAILABLE_MEMORY_MB"
+
+	// BrowserMinAvailableShmMB pauses new managed browser contexts while
+	// /dev/shm available space is below this many MiB.
+	BrowserMinAvailableShmMB = "K6_BROWSER_MIN_AVAILABLE_SHM_MB"
+
+	// BrowserAdmissionPollInterval controls how often a VU waiting for browser
+	// capacity rechecks resource headroom.
+	BrowserAdmissionPollInterval = "K6_BROWSER_ADMISSION_POLL_INTERVAL"
+
+	// BrowserEndpointCooldown controls how long a failed remote browser
+	// endpoint is quarantined before it can be retried.
+	BrowserEndpointCooldown = "K6_BROWSER_ENDPOINT_COOLDOWN"
 )
 
 // Logging and debugging.
