@@ -39,6 +39,8 @@ type (
 		filePersister     filePersister
 		testRunID         string
 		browserErrors     *k6metrics.Metric
+		browserActiveVUs  *k6metrics.Metric
+		browserWaitingVUs *k6metrics.Metric
 		screenshotOnError bool
 	}
 
@@ -137,6 +139,12 @@ func (m *RootModule) initialize(vu k6modules.VU) {
 		m.testRunID = e
 	}
 	m.browserErrors = initEnv.Registry.MustNewMetric("browser_errors", k6metrics.Counter)
+	m.browserActiveVUs = initEnv.Registry.MustNewMetric("browser_active_vus", k6metrics.Gauge)
+	m.browserWaitingVUs = initEnv.Registry.MustNewMetric("browser_waiting_vus", k6metrics.Gauge)
+	m.remoteRegistry.admissionMetrics = &browserAdmissionMetrics{
+		active:  m.browserActiveVUs,
+		waiting: m.browserWaitingVUs,
+	}
 	if v, ok := initEnv.LookupEnv(env.ScreenshotOnError); ok && v == "true" {
 		m.screenshotOnError = true
 	}
