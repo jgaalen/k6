@@ -2,8 +2,6 @@ name: k6packager
 on:
   # Enable manually triggering this workflow via the API or web UI
   workflow_dispatch:
-  schedule:
-    - cron: '0 0 * * 0' # weekly (Sundays at 00:00)
 
 defaults:
   run:
