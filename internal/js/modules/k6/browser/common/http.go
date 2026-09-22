@@ -21,6 +21,7 @@ import (
 	"go.k6.io/k6/v2/internal/js/modules/k6/browser/log"
 
 	k6modules "go.k6.io/k6/v2/js/modules"
+	k6metrics "go.k6.io/k6/v2/metrics"
 )
 
 // These ResourceTypes are duplicates of CDP's network.ResourceType. We want to work
@@ -120,6 +121,8 @@ type Request struct {
 	responseEndWall time.Time
 	// encodedDataLength: actual bytes received over the wire (compressed + headers), from LoadingFinished.
 	encodedDataLength int64
+	tagsAndMeta       k6metrics.TagsAndMeta
+	networkOperation  *networkOperationContext
 }
 
 // NewRequestParams are input parameters for NewRequest.
@@ -129,6 +132,8 @@ type NewRequestParams struct {
 	redirectChain     []*Request
 	interceptionID    fetch.RequestID
 	allowInterception bool
+	tagsAndMeta       k6metrics.TagsAndMeta
+	networkOperation  *networkOperationContext
 }
 
 // NewRequest creates a new HTTP request.
@@ -142,8 +147,7 @@ func NewRequest(ctx context.Context, logger *log.Logger, rp NewRequestParams) (*
 
 	u, err := url.Parse(ev.Request.URL)
 	if err != nil {
-		var uerr *url.Error
-		if errors.As(err, &uerr) {
+		if uerr, ok := errors.AsType[*url.Error](err); ok {
 			err = uerr.Err
 		}
 		return nil, fmt.Errorf("parsing URL %q: %w", ev.Request.URL, err)
@@ -184,6 +188,8 @@ func NewRequest(ctx context.Context, logger *log.Logger, rp NewRequestParams) (*
 		headers:             make(map[string][]string, len(ev.Request.Headers)),
 		ctx:                 ctx,
 		rawHeadersCh:        make(chan struct{}),
+		tagsAndMeta:         rp.tagsAndMeta,
+		networkOperation:    rp.networkOperation,
 	}
 	for n, v := range ev.Request.Headers {
 		if s, ok := v.(string); ok {

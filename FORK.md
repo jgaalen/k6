@@ -26,6 +26,10 @@ code to the k6 executable.
 - Extends browser network and error metrics, including optional error screenshots.
 - Adds the `lean` build tag used for smaller cloud-free release binaries.
 - Adds Breaking-IT build helpers and operational configuration.
+- Excludes extension-usage, installation-ID, and build-origin reporting in all builds.
+  Basic anonymous run statistics retain the existing `K6_NO_USAGE_REPORT` opt-out.
+- Preserves custom browser timings and error payloads with upstream async metric context.
+- Excludes upstream's Grafana-specific Renovate approval automation.
 
 For the complete change history, compare the `breakingit` branch with the upstream
 [grafana/k6](https://github.com/grafana/k6) repository.
