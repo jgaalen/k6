@@ -83,7 +83,9 @@ func Init(
 	logger logrus.FieldLogger, cli, json Source, runtimeEnv map[string]string,
 ) (*Flags, error) {
 	flags := &Flags{}
-	active, err := initInto(reflect.ValueOf(flags).Elem(), logger, cli, json, runtimeEnv, defaultAliases())
+	// Fork default, below explicit CLI/env/JSON lists (including empty opt-out lists).
+	active, err := initInto(reflect.ValueOf(flags).Elem(), logger, cli, json, runtimeEnv,
+		defaultAliases(), "async-metric-context")
 	if err != nil {
 		return nil, err
 	}
@@ -103,6 +105,7 @@ func allOf(t reflect.Type) ([]Flag, error) {
 func initInto(
 	target reflect.Value, logger logrus.FieldLogger, cli, json Source,
 	runtimeEnv map[string]string, aliases []alias,
+	defaults ...string,
 ) ([]string, error) {
 	defs, err := parseDefinitions(target.Type())
 	if err != nil {
@@ -115,7 +118,7 @@ func initInto(
 		}
 	}
 
-	return resolveInto(defs, target, cli, resolveEnvSurface(defs, runtimeEnv, logger), json, logger)
+	return resolveInto(defs, target, cli, resolveEnvSurface(defs, runtimeEnv, logger), json, logger, defaults...)
 }
 
 // definition holds the parsed metadata and field index for one flag field.

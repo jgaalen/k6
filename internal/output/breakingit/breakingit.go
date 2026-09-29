@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -86,6 +87,7 @@ type Logger struct {
 	envTags           map[string]string
 	customPatterns    map[string]string
 	isSynthetic       bool
+	transactionSource transactionSource
 }
 
 func New(params output.Params) (output.Output, error) {
@@ -106,6 +108,10 @@ func New(params output.Params) (output.Output, error) {
 	token := os.Getenv("PG_PROXY_TOKEN")
 	if token == "" {
 		return nil, fmt.Errorf("PG_PROXY_TOKEN is required for Authorization")
+	}
+	transactionSource, err := parseTransactionSource(params.Environment["BREAKINGIT_TRANSACTION_SOURCE"])
+	if err != nil {
+		return nil, err
 	}
 
 	// HTTP client with keep-alive and TLS skip per proxy config
@@ -174,6 +180,7 @@ func New(params output.Params) (output.Output, error) {
 		envTags:           envTags,
 		customPatterns:    customPatterns,
 		isSynthetic:       isSynthetic,
+		transactionSource: transactionSource,
 	}
 	l.batchTimer = time.NewTimer(time.Second)
 	go l.batchLoop()
@@ -561,6 +568,10 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 				l.mu.Unlock()
 				continue
 			}
+			if (s.Metric.Name == "pages" && l.transactionSource == transactionsGroups) ||
+				(s.Metric.Name == "group_duration" && l.transactionSource == transactionsPages) {
+				continue
+			}
 			// pages -> transactions
 			if s.Metric.Name == "pages" {
 				m := s.Tags.Map()
@@ -620,8 +631,9 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 				l.mu.Unlock()
 				continue
 			}
-			// k6 http group transactions -> transactions
+			// Native HTTP and browser groups -> transactions.
 			if s.Metric.Name == "group_duration" {
+				success := strconv.FormatBool(!s.GroupFailed)
 				m := s.Tags.Map()
 				// Derive transaction_name from 'group' tag, fallback to 'name'
 				nameRaw := fmt.Sprintf("%v", m["group"])
@@ -643,7 +655,7 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 						fmt.Sprintf("%v", l.envTags["node_name"]),
 						fmt.Sprintf("%v", m["scenario"]), // thread_group_name from k6 scenario
 						nameRaw,
-						"true",
+						success,
 						"",
 						"",
 						fmtInt(s.Value),
@@ -655,7 +667,7 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 						fmt.Sprintf("%v", l.envTags["run_id"]),
 						fmt.Sprintf("%v", l.envTags["location"]),
 						nameRaw,
-						"true",
+						success,
 						"",
 						"",
 						fmtInt(s.Value),
@@ -820,8 +832,10 @@ func (l *Logger) processHttpGroup(g *MetricGroup) {
 		transactionName = g.Tags["transaction"]
 	} else if g.Tags["group"] != "" {
 		transactionName = strings.TrimPrefix(g.Tags["group"], "::")
-		// For browser, group is often auto-filled from path/name in copyTagsForHTTP; treat that as empty so we don't duplicate sampler_name.
-		if isBrowser && (transactionName == samplerName || transactionName == "/") {
+		// Native group paths start with "::". Keep these even when their name matches
+		// the request path; only discard the path/name fallback from copyTagsForHTTP.
+		if isBrowser && !strings.HasPrefix(g.Tags["group"], "::") &&
+			(transactionName == samplerName || transactionName == "/") {
 			transactionName = ""
 		}
 	}

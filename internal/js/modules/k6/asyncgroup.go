@@ -19,7 +19,7 @@ type asyncGroup struct {
 	settled bool
 }
 
-func (g *asyncGroup) emitDuration() {
+func (g *asyncGroup) emitDuration(failed bool) {
 	if g.settled {
 		return
 	}
@@ -27,29 +27,30 @@ func (g *asyncGroup) emitDuration() {
 
 	// Group only creates asyncGroup for an active VU, whose state remains allocated across
 	// iterations and cancellation.
-	emitGroupDuration(g.vu, g.start, time.Now(), g.tagsAndMeta)
+	emitGroupDuration(g.vu, g.start, time.Now(), g.tagsAndMeta, failed)
 }
 
-func emitGroupDuration(vu modules.VU, start, end time.Time, tagsAndMeta metrics.TagsAndMeta) {
+func emitGroupDuration(vu modules.VU, start, end time.Time, tagsAndMeta metrics.TagsAndMeta, failed bool) {
 	state := vu.State()
 	metrics.PushIfNotDone(vu.Context(), state.Samples, metrics.Sample{
 		TimeSeries: metrics.TimeSeries{
 			Metric: state.BuiltinMetrics.GroupDuration,
 			Tags:   tagsAndMeta.Tags,
 		},
-		Time:     end,
-		Value:    metrics.D(end.Sub(start)),
-		Metadata: tagsAndMeta.Metadata,
+		Time:        end,
+		Value:       metrics.D(end.Sub(start)),
+		Metadata:    tagsAndMeta.Metadata,
+		GroupFailed: failed,
 	})
 }
 
 func (g *asyncGroup) onFulfilled(call sobek.FunctionCall) sobek.Value {
-	g.emitDuration()
+	g.emitDuration(false)
 	return call.Argument(0)
 }
 
 func (g *asyncGroup) onRejected(call sobek.FunctionCall) sobek.Value {
-	g.emitDuration()
+	g.emitDuration(true)
 	// Sobek uses a panic to throw an arbitrary JavaScript value from a Go callback. Returning a Go
 	// error here would wrap the value and change the promise's rejection reason.
 	panic(call.Argument(0))

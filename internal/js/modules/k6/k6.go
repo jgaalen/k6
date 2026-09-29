@@ -136,6 +136,9 @@ func (mi *K6) Group(name string, val sobek.Value) (sobek.Value, error) {
 		groupTagsAndMeta = state.Tags.GetCurrentValues()
 	}
 	synchronous := true
+	// Default to failure so a thrown property getter or other unwinding path is not
+	// exported as a successful BreakTest transaction.
+	groupSucceeded := false
 	var startTime, endTime time.Time
 	defer func() {
 		if synchronous {
@@ -146,7 +149,7 @@ func (mi *K6) Group(name string, val sobek.Value) (sobek.Value, error) {
 			if !mi.asyncGroups {
 				durationTagsAndMeta = state.Tags.GetCurrentValues()
 			}
-			emitGroupDuration(mi.vu, startTime, endTime, durationTagsAndMeta)
+			emitGroupDuration(mi.vu, startTime, endTime, durationTagsAndMeta, !groupSucceeded)
 		}
 		if mi.asyncGroups {
 			state.Tags.Modify(func(tagsAndMeta *metrics.TagsAndMeta) {
@@ -161,11 +164,13 @@ func (mi *K6) Group(name string, val sobek.Value) (sobek.Value, error) {
 	ret, err := fn(sobek.Undefined())
 	endTime = time.Now()
 	if err != nil || !mi.asyncGroups {
+		groupSucceeded = err == nil
 		return ret, err
 	}
 
 	thenFn, isThenable := asThenable(ret)
 	if !isThenable {
+		groupSucceeded = true
 		return ret, nil
 	}
 

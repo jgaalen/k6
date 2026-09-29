@@ -153,6 +153,6 @@ export default function () {};`
 	archiveEnv, _ := uploadAndCaptureArchive(t,
 		[]string{"k6", "cloud", "run", "test.js"}, nil, script)
 
-	_, ok := archiveEnv["K6_FEATURES"]
-	assert.False(t, ok, "options.features must not convey to the worker")
+	assert.Equal(t, "async-metric-context", archiveEnv["K6_FEATURES"],
+		"only the fork default, not options.features, should convey to the worker")
 }
