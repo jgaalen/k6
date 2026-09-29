@@ -8,10 +8,11 @@ import (
 )
 
 // metricContextTracker propagates metric context through promise reactions, including await
-// continuations. Promise reactions do not nest and run on the event-loop goroutine.
+// continuations. Reactions run on the event-loop goroutine, but a native handler that settles
+// another promise can re-enter Sobek's job queue before its own reaction exits.
 type metricContextTracker struct {
-	state   func() *lib.State
-	restore func()
+	state    func() *lib.State
+	restores []func()
 }
 
 // CapturedMetricContext is an immutable registration-time metric context. Its zero value is a
@@ -41,18 +42,24 @@ func (t *metricContextTracker) Grab() any {
 func (t *metricContextTracker) Resumed(trackingObject any) {
 	captured, ok := trackingObject.(metrics.TagsAndMeta)
 	state := t.state()
-	if !ok || state == nil || state.Tags == nil {
-		t.restore = nil
-		return
+	var restore func()
+	if ok && state != nil && state.Tags != nil {
+		restore = ApplyMetricContext(state, captured)
 	}
-	t.restore = ApplyMetricContext(state, captured)
+	t.restores = append(t.restores, restore)
 }
 
 // Exited restores the context that was active before the promise reaction ran.
 func (t *metricContextTracker) Exited() {
-	if t.restore != nil {
-		t.restore()
-		t.restore = nil
+	if len(t.restores) == 0 {
+		return
+	}
+	last := len(t.restores) - 1
+	restore := t.restores[last]
+	t.restores[last] = nil
+	t.restores = t.restores[:last]
+	if restore != nil {
+		restore()
 	}
 }
 
