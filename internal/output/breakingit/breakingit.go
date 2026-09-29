@@ -6,8 +6,8 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"crypto/tls"
-	"encoding/csv"
 	"encoding/hex"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -69,9 +69,9 @@ type Logger struct {
 	httpClient *http.Client
 
 	// batch buffers
-	mu         sync.Mutex
-	bufHTTP    *bytes.Buffer
-	bufVUs     *bytes.Buffer
+	mu      sync.Mutex
+	bufHTTP *bytes.Buffer
+	bufVUs  *bytes.Buffer
 	bufTrans   *bytes.Buffer
 	bufErrors  *bytes.Buffer
 	batchTimer *time.Timer
@@ -88,10 +88,6 @@ type Logger struct {
 	customPatterns    map[string]string
 	isSynthetic       bool
 	transactionSource transactionSource
-	browserAdmission  bool
-	browserActiveVUs  int64
-	browserActivePeak int64
-	browserWaitingVUs int64
 }
 
 func New(params output.Params) (output.Output, error) {
@@ -185,7 +181,6 @@ func New(params output.Params) (output.Output, error) {
 		customPatterns:    customPatterns,
 		isSynthetic:       isSynthetic,
 		transactionSource: transactionSource,
-		browserAdmission:  os.Getenv("K6_BROWSER_MAX_ACTIVE_CONTEXTS") != "",
 	}
 	l.batchTimer = time.NewTimer(time.Second)
 	go l.batchLoop()
@@ -546,21 +541,6 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 	for _, sc := range samples {
 		for _, s := range sc.GetSamples() {
 			ts := s.Time.UnixNano()
-			if s.Metric.Name == "browser_active_vus" {
-				l.mu.Lock()
-				l.browserActiveVUs = int64(s.Value)
-				if l.browserActiveVUs > l.browserActivePeak {
-					l.browserActivePeak = l.browserActiveVUs
-				}
-				l.mu.Unlock()
-				continue
-			}
-			if s.Metric.Name == "browser_waiting_vus" {
-				l.mu.Lock()
-				l.browserWaitingVUs = int64(s.Value)
-				l.mu.Unlock()
-				continue
-			}
 			canonicalKey := httpMetricCanonicalKey(s.Metric.Name)
 			if canonicalKey != "" {
 				l.mu.Lock()
@@ -702,27 +682,16 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 			}
 			// vus -> virtual_users (active_threads)
 			if s.Metric.Name == "vus" && !l.isSynthetic {
-				activeVUs := int64(s.Value)
-				l.mu.Lock()
-				if l.browserAdmission {
-					if l.browserActivePeak < activeVUs {
-						activeVUs = l.browserActivePeak
-					}
-					// Admission emits a release immediately before the same VU acquires
-					// its next context. Export the peak seen in this output interval so
-					// that handoff does not look like a VU disappeared. Seed the next
-					// interval with the current value so sustained drops remain visible.
-					l.browserActivePeak = l.browserActiveVUs
-				}
 				row := []string{
 					time.Unix(0, ts).UTC().Format(time.RFC3339Nano),
 					fmt.Sprintf("%v", l.envTags["run_id"]),
 					fmt.Sprintf("%v", l.envTags["location"]),
 					fmt.Sprintf("%v", l.envTags["node_name"]),
-					fmt.Sprintf("%d", activeVUs), // active_threads
-					"",                           // started_threads (unknown)
-					"",                           // finished_threads (unknown)
+					fmt.Sprintf("%d", int64(s.Value)), // active_threads
+					"",                                // started_threads (unknown)
+					"",                                // finished_threads (unknown)
 				}
+				l.mu.Lock()
 				wv := csv.NewWriter(l.bufVUs)
 				_ = wv.Write(row)
 				wv.Flush()
@@ -764,20 +733,20 @@ func (l *Logger) AddMetricSamples(samples []metrics.SampleContainer) {
 						fmt.Sprintf("%v", l.envTags["scenario_name"]),   // scenario_name
 						fmt.Sprintf("%v", l.envTags["location"]),        // location
 						fmt.Sprintf("%v", l.envTags["node_name"]),       // node_name
-						m["scenario"],                          // thread_group_name
-						transactionName,                        // transaction_name
-						samplerName,                            // sampler_name
-						responseCode,                           // response_code
-						responseTime,                           // response_time
-						"",                                     // connection_time
-						url,                                    // url
-						"",                                     // assertions
-						checkMsg,                               // response_message
-						requestData,                            // request_headers (used for request data)
-						"",                                     // response_headers
-						responseData,                           // response_data
-						id,                                     // id (UUIDv7 generated from measurement timestamp)
-						fmt.Sprintf("%v", l.envTags["run_id"]), // run_id last
+						m["scenario"],   // thread_group_name
+						transactionName, // transaction_name
+						samplerName,     // sampler_name
+						responseCode,    // response_code
+						responseTime,    // response_time
+						"",              // connection_time
+						url,             // url
+						"",              // assertions
+						checkMsg,        // response_message
+						requestData,     // request_headers (used for request data)
+						"",              // response_headers
+						responseData,    // response_data
+						id,              // id (UUIDv7 generated from measurement timestamp)
+						fmt.Sprintf("%v", l.envTags["run_id"]),          // run_id last
 					}
 					l.mu.Lock()
 					we := csv.NewWriter(l.bufErrors)
@@ -1272,19 +1241,19 @@ func (l *Logger) processBrowserError(s metrics.Sample, ts int64) {
 			fmt.Sprintf("%v", l.envTags["scenario_name"]),   // scenario_name
 			fmt.Sprintf("%v", l.envTags["location"]),        // location
 			fmt.Sprintf("%v", l.envTags["node_name"]),       // node_name
-			m["scenario"],                          // thread_group_name
-			transactionName,                        // transaction_name
-			samplerName,                            // sampler_name
-			"",                                     // response_code
-			"",                                     // response_time
-			"",                                     // connection_time
-			"",                                     // url
-			"",                                     // assertions
-			errMsg,                                 // response_message
-			"",                                     // request_headers
-			"",                                     // response_headers
-			screenshotHash,                         // response_data (screenshot hash reference)
-			id,                                     // id (UUIDv7)
+			m["scenario"],   // thread_group_name
+			transactionName, // transaction_name
+			samplerName,     // sampler_name
+			"",              // response_code
+			"",              // response_time
+			"",              // connection_time
+			"",              // url
+			"",              // assertions
+			errMsg,          // response_message
+			"",              // request_headers
+			"",              // response_headers
+			screenshotHash,  // response_data (screenshot hash reference)
+			id,              // id (UUIDv7)
 			fmt.Sprintf("%v", l.envTags["run_id"]), // run_id last
 		}
 		l.mu.Lock()

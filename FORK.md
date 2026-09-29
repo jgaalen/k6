@@ -39,9 +39,9 @@ code to the k6 executable.
 ## Development and builds in jgaalen/k6
 
 `breakingit` is the custom build branch, based on upstream k6 v2.3.0. Build from `breakingit` to
-include the fork customizations, native group transactions, browser group-context fix, and browser
-admission control together. Upstream releases are integrated through `master` and then merged into
-`breakingit`; push custom changes only to the jgaalen/k6 fork.
+include the fork customizations, native group transactions and the browser group-context fix together.
+Upstream releases are integrated through `master` and then merged into `breakingit`; push custom
+changes only to the jgaalen/k6 fork.
 
 ```sh
 git switch breakingit
@@ -52,19 +52,6 @@ git pull --ff-only origin breakingit
 The build script reads the source in the current checkout and writes Linux and macOS binaries for
 amd64 and arm64 into `dist/`. It does not install or deploy them. Its displayed `VERSION` value is
 informational; use the binary's `version` command and SHA-256 checksum to identify an artifact.
-
-## Browser admission control
-
-Admission is opt-in. A new binary alone does not enable it. BreakTest must pass the computed
-`K6_BROWSER_MAX_ACTIVE_CONTEXTS`, `K6_BROWSER_MIN_AVAILABLE_MEMORY_MB`, and
-`K6_BROWSER_MIN_AVAILABLE_SHM_MB` settings to k6. The corresponding BreakTest sizing integration
-from PR #401 must be present in its active code; it is not part of this repository.
-
-When enabled, managed browser iterations acquire a shared capacity lease, choose a healthy browser
-endpoint, and release the lease at iteration end. Additional VUs wait when capacity or resource
-headroom is unavailable. Endpoint cooldown defaults to 5 seconds and admission polling to 250 ms.
-Resource probes measure the k6 host/container; they do not measure a separate remote browser host.
-Requested executor VUs can exceed admitted browser VUs, so report achieved concurrency separately.
 
 For the complete change history, compare the `breakingit` branch with the upstream
 [grafana/k6](https://github.com/grafana/k6) repository.
