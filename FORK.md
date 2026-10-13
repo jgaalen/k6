@@ -63,3 +63,23 @@ informational; use the binary's `version` command and SHA-256 checksum to identi
 
 For the complete change history, compare the `master` branch with the upstream
 [grafana/k6](https://github.com/grafana/k6) repository.
+
+## Validation before merging
+
+Run lint and the full race-enabled suite with bounded concurrency. Browser tests launch real
+Chromium processes; on a workstation, the upstream 210-second package timeout and default
+parallelism can overload the browser suite.
+
+```sh
+make lint
+go test -race -p 2 -parallel 2 -timeout 15m ./...
+go test -race -p 2 -parallel 2 -tags lean -timeout 210s \
+  ./internal/cmd ./internal/cmd/tests ./internal/api ./internal/js \
+  ./internal/features ./internal/output/breakingit
+go build -o dist/k6 .
+go build -tags lean -o dist/k6-lean .
+```
+
+Cloud, REST API, and excluded-output integration tests require the full build. Lean-specific
+checks verify their stubs and output availability; shared runtime and fork regression tests
+run in both configurations.
