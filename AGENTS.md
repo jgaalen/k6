@@ -13,10 +13,12 @@ This repository is a personal fork of grafana/k6 with private modifications
   ```
   If a push to upstream fails with `DISABLED`, that is intentional — do not
   "fix" the URL.
-- To pull in a new upstream release: fetch upstream tags, fast-forward `master`
-  to the release tag, merge `master` into `breakingit`, and gate any new cloud
-  functionality behind `//go:build !lean` (see `internal/cmd/cloud_lean.go` for
-  the stub pattern). Release binaries are built with `-tags lean`
+- `master` is the canonical fork development and build branch. The historical
+  `breakingit` work is consolidated there; do not use upstream as a replacement for it.
+- To pull in a new stable upstream release: fetch upstream tags, create an integration
+  branch from `origin/master`, merge the release tag, and open a tested pull request
+  against jgaalen/k6 `master`. Gate any new cloud functionality behind `//go:build !lean`
+  (see `internal/cmd/cloud_lean.go` for the stub pattern). Release binaries are built with `-tags lean`
   (`./build-linux-binaries.sh`).
 
 ## Project Overview
