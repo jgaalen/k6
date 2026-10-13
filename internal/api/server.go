@@ -1,3 +1,5 @@
+//go:build !lean
+
 // Package api contains the REST API implementation for k6.
 // It also registers the services endpoints like pprof
 package api
@@ -10,7 +12,6 @@ import (
 	_ "net/http/pprof" //nolint:gosec // Register pprof handlers
 	"time"
 
-	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"github.com/sirupsen/logrus"
 
 	v1 "go.k6.io/k6/v2/api/v1"
@@ -45,7 +46,7 @@ func injectProfilerHandler(mux *http.ServeMux, profilingEnabled bool) {
 
 	mux.Handle("/debug/pprof/", handler)
 	mux.Handle("/debug/vars/", expvar.Handler())
-	mux.Handle("/metrics", promhttp.Handler())
+	mux.Handle("/metrics", metricsHandler())
 }
 
 // GetServer returns a http.Server instance that can serve k6's REST API.

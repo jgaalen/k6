@@ -2,9 +2,11 @@ package browser
 
 import (
 	"context"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/grafana/sobek"
 
@@ -14,6 +16,7 @@ import (
 	"go.k6.io/k6/v2/internal/js/taskqueue"
 	k6common "go.k6.io/k6/v2/js/common"
 	"go.k6.io/k6/v2/js/promises"
+	k6metrics "go.k6.io/k6/v2/metrics"
 )
 
 func panicIfFatalError(ctx context.Context, err error) {
@@ -87,18 +90,83 @@ func newRegExMatcher(ctx context.Context, vu moduleVU, tq *taskqueue.TaskQueue) 
 // promise runs fn in a goroutine and returns a new sobek.Promise.
 //   - If fn returns a nil error, resolves the promise with the
 //     first result value fn returns.
-//   - Otherwise, rejects the promise with the error fn returns.
+//   - Otherwise, rejects the promise with the error fn returns
+//     and emits a browser_errors metric sample.
 func promise(vu moduleVU, fn func() (result any, reason error)) *sobek.Promise {
+	// Capture on the JS thread: an async group's context may be restored before
+	// fn fails in its goroutine. Never enter a runtime metric context there.
+	var tagsAndMeta k6metrics.TagsAndMeta
+	if state := vu.State(); k6common.AsyncMetricContextEnabled(state) {
+		tagsAndMeta = state.Tags.GetCurrentValues()
+	}
 	p, resolve, reject := promises.New(vu)
 	go func() {
 		v, err := fn()
 		if err != nil {
+			emitBrowserError(vu, err, tagsAndMeta)
 			reject(k6ext.BrowserError(err))
 			return
 		}
 		resolve(v)
 	}()
 	return p
+}
+
+// emitBrowserError pushes a browser_errors metric sample with the error message as a tag.
+// When K6_BROWSER_SCREENSHOT_ON_ERROR is enabled, it also captures a screenshot of the
+// active page and includes it as a base64-encoded "screenshot" tag on the metric.
+func emitBrowserError(vu moduleVU, err error, tagsAndMeta k6metrics.TagsAndMeta) {
+	state := vu.State()
+	if state == nil || vu.browserErrors == nil {
+		return
+	}
+	if tagsAndMeta.Tags == nil {
+		tagsAndMeta = state.Tags.GetCurrentValues()
+	}
+	tags := tagsAndMeta.Tags.With("error", err.Error())
+
+	if vu.screenshotOnError {
+		if screenshot := captureErrorScreenshot(vu); screenshot != "" {
+			tags = tags.With("screenshot", screenshot)
+		}
+	}
+
+	now := time.Now()
+	k6metrics.PushIfNotDone(vu.Context(), state.Samples, k6metrics.ConnectedSamples{
+		Samples: []k6metrics.Sample{
+			{
+				TimeSeries: k6metrics.TimeSeries{Metric: vu.browserErrors, Tags: tags},
+				Value:      1,
+				Time:       now,
+				Metadata:   tagsAndMeta.Metadata,
+			},
+		},
+	})
+}
+
+// captureErrorScreenshot takes a screenshot of the active browser page and returns
+// it as a base64-encoded PNG string. Returns empty string if screenshot cannot be taken.
+func captureErrorScreenshot(vu moduleVU) string {
+	browser, err := vu.browser()
+	if err != nil {
+		return ""
+	}
+	bCtx := browser.Context()
+	if bCtx == nil {
+		return ""
+	}
+	pages := bCtx.Pages()
+	if len(pages) == 0 {
+		return ""
+	}
+
+	opts := common.NewPageScreenshotOptions()
+	buf, err := pages[0].Screenshot(opts, nil)
+	if err != nil {
+		return ""
+	}
+
+	return base64.StdEncoding.EncodeToString(buf)
 }
 
 // queueTask queues the given function fn to run on the given task queue tq.
@@ -129,6 +197,17 @@ func queueTask[T any](
 			return zero, fmt.Errorf("running on task queue: %w", common.ContextErr(ctx))
 		}
 	}
+}
+
+func queueTaskWithMetricContext[T any](
+	ctx context.Context,
+	tq *taskqueue.TaskQueue,
+	captured k6common.CapturedMetricContext,
+	fn func() (T, error),
+) (future func() (T, error)) {
+	return queueTask(ctx, tq, func() (T, error) {
+		return k6common.RunWithMetricContext(captured, fn)
+	})
 }
 
 // newTaskQueue returns a new [taskqueue.TaskQueue] that is closed after

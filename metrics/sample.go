@@ -30,6 +30,18 @@ type Sample struct {
 	// It can be nil if it wasn't explicitly specified, reduce memory
 	// allocations and GC overhead.
 	Metadata map[string]string
+
+	// HTTP error data fields, only populated on http_req_failed samples
+	// when the HTTPErrorData option is enabled.
+	HTTPErrorReqHeaders string
+	HTTPErrorReqBody    string
+	HTTPErrorResHeaders string
+	HTTPErrorResBody    string
+
+	// GroupFailed is set on group_duration when the callback throws or its returned promise
+	// rejects. The breakingit output uses it for transaction outcomes without adding metric tags.
+	// Failed checks and errors caught inside the callback do not make a group fail.
+	GroupFailed bool
 }
 
 // SampleContainer is a simple abstraction that allows sample

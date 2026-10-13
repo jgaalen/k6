@@ -71,7 +71,7 @@ func newOutput(params output.Params) (*Output, error) {
 			resTags:      resTags,
 			ignoredTags:  ignoredTags,
 			csvWriter:    stdoutWriter,
-			row:          make([]string, 3+len(resTags)+2),
+			row:          make([]string, 3+len(resTags)+6),
 			saveInterval: saveInterval,
 			timeFormat:   timeFormat,
 			closeFn:      func() error { return nil },
@@ -89,7 +89,7 @@ func newOutput(params output.Params) (*Output, error) {
 		fname:        fname,
 		resTags:      resTags,
 		ignoredTags:  ignoredTags,
-		row:          make([]string, 3+len(resTags)+2),
+		row:          make([]string, 3+len(resTags)+6),
 		saveInterval: saveInterval,
 		timeFormat:   timeFormat,
 		logger:       logger,
@@ -208,6 +208,7 @@ func (o *Output) flushMetrics() {
 func MakeHeader(tags []string) []string {
 	tags = append(tags, "extra_tags")
 	tags = append(tags, "metadata")
+	tags = append(tags, "error_req_headers", "error_req_body", "error_res_headers", "error_res_body")
 	return append([]string{"metric_name", "timestamp", "metric_value"}, tags...)
 }
 
@@ -272,7 +273,7 @@ func SampleToRow(sample *metrics.Sample, resTags []string, ignoredTags []string,
 			break
 		}
 	}
-	row[len(row)-2] = extraTags.String()
+	row[len(row)-6] = extraTags.String()
 	extraTags.Reset()
 	prev = false
 
@@ -281,7 +282,12 @@ func SampleToRow(sample *metrics.Sample, resTags []string, ignoredTags []string,
 			break
 		}
 	}
-	row[len(row)-1] = extraTags.String()
+	row[len(row)-5] = extraTags.String()
+
+	row[len(row)-4] = sample.HTTPErrorReqHeaders
+	row[len(row)-3] = sample.HTTPErrorReqBody
+	row[len(row)-2] = sample.HTTPErrorResHeaders
+	row[len(row)-1] = sample.HTTPErrorResBody
 	return row
 }
 

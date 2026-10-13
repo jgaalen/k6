@@ -7,6 +7,7 @@ import (
 	"go.k6.io/k6/v2/internal/js/modules/k6/browser/k6ext"
 
 	k6modules "go.k6.io/k6/v2/js/modules"
+	k6metrics "go.k6.io/k6/v2/metrics"
 )
 
 // moduleVU carries module specific VU information.
@@ -23,7 +24,9 @@ type moduleVU struct {
 
 	filePersister
 
-	testRunID string
+	testRunID         string
+	browserErrors     *k6metrics.Metric
+	screenshotOnError bool
 }
 
 // browser returns the VU browser instance for the current iteration.

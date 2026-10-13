@@ -19,7 +19,6 @@ import (
 	"github.com/Masterminds/semver/v3"
 	"github.com/grafana/k6provider"
 
-	"go.k6.io/k6/v2/cloudapi"
 	"go.k6.io/k6/v2/cmd/state"
 	"go.k6.io/k6/v2/errext"
 	"go.k6.io/k6/v2/errext/exitcodes"
@@ -97,8 +96,7 @@ func (b *customBinary) run(ctx context.Context, gs *state.GlobalState) error {
 	for {
 		select {
 		case err := <-done:
-			var exitError *exec.ExitError
-			if errors.As(err, &exitError) {
+			if exitError, ok := errors.AsType[*exec.ExitError](err); ok {
 				return errext.WithExitCodeIfNone(errAlreadyReported, exitcodes.ExitCode(exitError.ExitCode())) //nolint:gosec
 			}
 			return err
@@ -364,22 +362,6 @@ func getProviderConfig(gs *state.GlobalState) k6provider.Config {
 	}
 
 	return config
-}
-
-// extractToken gets the cloud token required to access the build service
-// from the environment or from the config file
-func extractToken(gs *state.GlobalState) (string, error) {
-	diskConfig, err := readDiskConfig(gs)
-	if err != nil {
-		return "", err
-	}
-
-	config, _, err := cloudapi.GetConsolidatedConfig(diskConfig.Collectors["cloud"], gs.Env, "", nil)
-	if err != nil {
-		return "", err
-	}
-
-	return config.Token.String, nil
 }
 
 func processUseDirectives(name string, text []byte, deps dependencies) error {

@@ -1,3 +1,5 @@
+//go:build !lean
+
 package cmd
 
 import (
@@ -9,12 +11,12 @@ type cmdCloudTest struct {
 	globalState *state.GlobalState
 }
 
-func getCmdCloudTest(cloudCmd *cmdCloud) *cobra.Command {
+func getCmdCloudTest(gs *state.GlobalState) *cobra.Command {
 	c := &cmdCloudTest{
-		globalState: cloudCmd.gs,
+		globalState: gs,
 	}
 
-	exampleText := getExampleText(cloudCmd.gs, `
+	exampleText := getExampleText(gs, `
   # List tests in the default project
   $ {{.}} cloud test list
 

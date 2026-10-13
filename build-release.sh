@@ -44,6 +44,10 @@ package() {
     echo "- Creating ${NAME}.${FMT} package..."
     case $FMT in
     deb|rpm)
+        if ! command -v nfpm &>/dev/null; then
+            echo "  Skipping ${FMT} (nfpm not found; install from https://github.com/goreleaser/nfpm)"
+            return 0
+        fi
         # nfpm can't substitute env vars in file paths, so we have to cd...
         cd "${OUT_DIR}/${NAME}"
         set -x # Show exactly what command was executed

@@ -268,7 +268,7 @@ func MakeRequest(ctx context.Context, state *lib.State, preq *ParsedHTTPRequest)
 	reqCtx, cancelFunc := context.WithTimeout(ctx, preq.Timeout)
 	defer cancelFunc()
 	mreq := preq.Req.WithContext(reqCtx)
-	res, resErr := client.Do(mreq) //nolint:gosec
+	res, resErr := client.Do(mreq)
 
 	// TODO(imiric): It would be safer to check for a writeable
 	// response body here instead of status code, but those are
@@ -285,6 +285,21 @@ func MakeRequest(ctx context.Context, state *lib.State, preq *ParsedHTTPRequest)
 			// TODO This can be more specific that the timeout happened in the middle of the reading of the body
 			resErr = NewK6Error(requestTimeoutErrorCode, requestTimeoutErrorCodeMsg, resErr)
 		}
+	}
+	if state.Options.HTTPErrorData.Bool {
+		if res != nil {
+			resp.Status = res.StatusCode
+			resp.StatusText = res.Status
+			resp.Proto = res.Proto
+			if len(res.Header) > 0 {
+				resp.Headers = make(map[string]string, len(res.Header))
+				for k, vs := range res.Header {
+					resp.Headers[k] = strings.Join(vs, ", ")
+				}
+			}
+		}
+		tracerTransport.errorDataReq = respReq
+		tracerTransport.errorDataResp = resp
 	}
 	finishedReq := tracerTransport.processLastSavedRequest(wrapDecompressionError(resErr))
 	if finishedReq != nil {
@@ -349,6 +364,7 @@ func MakeRequest(ctx context.Context, state *lib.State, preq *ParsedHTTPRequest)
 func SetRequestCookies(req *http.Request, jar *cookiejar.Jar, reqCookies map[string]*HTTPRequestCookie) {
 	replacedCookies := make(map[string]struct{})
 	for key, reqCookie := range reqCookies {
+		//nolint:gosec // outgoing request cookie, not a Set-Cookie response
 		req.AddCookie(&http.Cookie{Name: key, Value: reqCookie.Value})
 		if reqCookie.Replace {
 			replacedCookies[key] = struct{}{}
@@ -356,6 +372,7 @@ func SetRequestCookies(req *http.Request, jar *cookiejar.Jar, reqCookies map[str
 	}
 	for _, c := range jar.Cookies(req.URL) {
 		if _, ok := replacedCookies[c.Name]; !ok {
+			//nolint:gosec // outgoing request cookie, not a Set-Cookie response
 			req.AddCookie(&http.Cookie{Name: c.Name, Value: c.Value})
 		}
 	}

@@ -71,6 +71,11 @@ const (
 	// to upload screenshots to a remote location instead of saving
 	// to the local disk.
 	ScreenshotsOutput = "K6_BROWSER_SCREENSHOTS_OUTPUT"
+
+	// ScreenshotOnError enables automatic screenshot capture when a
+	// browser error occurs. The screenshot is base64 encoded and
+	// added to the browser_errors metric as a "screenshot" tag.
+	ScreenshotOnError = "K6_BROWSER_SCREENSHOT_ON_ERROR"
 )
 
 // Infrastructural.

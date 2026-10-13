@@ -18,7 +18,7 @@ func TestNewConfig(t *testing.T) {
 	config := NewConfig()
 	assert.Equal(t, "file.csv", config.FileName.String)
 	assert.Equal(t, "1s", config.SaveInterval.String())
-	assert.Equal(t, "unix", config.TimeFormat.String)
+	assert.Equal(t, "unix_milli", config.TimeFormat.String)
 }
 
 func TestApply(t *testing.T) {
@@ -82,14 +82,14 @@ func TestParseArg(t *testing.T) {
 			config: Config{
 				FileName:     null.StringFrom("test_file.csv"),
 				SaveInterval: types.NewNullDuration(1*time.Second, false),
-				TimeFormat:   null.NewString("unix", false),
+				TimeFormat:   null.NewString("unix_milli", false),
 			},
 		},
 		"saveInterval=5s": {
 			config: Config{
 				FileName:     null.NewString("file.csv", false),
 				SaveInterval: types.NullDurationFrom(5 * time.Second),
-				TimeFormat:   null.NewString("unix", false),
+				TimeFormat:   null.NewString("unix_milli", false),
 			},
 		},
 		"filename=test.csv,saveInterval=5s": {
